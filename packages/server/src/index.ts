@@ -37,6 +37,7 @@ export { RiskEngine } from './scoring/engine.js'
 export { KeyManager, generateKeyPair, generateKeyPairAsync } from './crypto/keys.js'
 export { MemoryStore } from './store/memory.js'
 export { decryptToken, decryptTokenDev, base64urlDecode } from './crypto/decrypt.js'
+export { computeKeystrokeUniformity, computeMouseEntropy } from './scoring/behavior.js'
 
 export interface BoltFraud {
   verify(encryptedToken: string, clientIP?: string): Promise<Decision>
@@ -44,6 +45,11 @@ export interface BoltFraud {
 }
 
 export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
+  // Validate: both keys must be provided together, or neither
+  if ((config.privateKeyPem && !config.publicKeyPem) || (!config.privateKeyPem && config.publicKeyPem)) {
+    throw new Error('createBoltFraud: both privateKeyPem and publicKeyPem must be provided together')
+  }
+
   const keyManager = new KeyManager()
 
   if (config.privateKeyPem && config.publicKeyPem) {
@@ -71,9 +77,17 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
         }
       }
 
+      // Compute a stable fingerprint hash — never use empty string as key
+      // to avoid conflating all clients with blocked canvas APIs
+      const fpHash =
+        token.fingerprint.canvas.hash ||
+        token.fingerprint.webgl.hash ||
+        token.fingerprint.audio.hash ||
+        'unknown'
+
       // Save fingerprint for IP tracking
       if (clientIP) {
-        await store.saveFingerprint(token.fingerprint.canvas.hash, clientIP)
+        await store.saveFingerprint(fpHash, clientIP)
       }
 
       return engine.score(token, clientIP)

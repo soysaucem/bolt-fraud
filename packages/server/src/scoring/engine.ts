@@ -12,6 +12,19 @@ export interface RiskEngineConfig {
   readonly store?: FingerprintStore
 }
 
+/**
+ * Compute a stable fingerprint hash from available canvas/webgl/audio hashes.
+ * Avoids using empty string as a store key (which would conflate all blocked-canvas clients).
+ */
+function computeFingerprintHash(token: Token): string {
+  return (
+    token.fingerprint.canvas.hash ||
+    token.fingerprint.webgl.hash ||
+    token.fingerprint.audio.hash ||
+    'unknown'
+  )
+}
+
 export class RiskEngine {
   private readonly _blockThreshold: number
   private readonly _challengeThreshold: number
@@ -24,7 +37,6 @@ export class RiskEngine {
   }
 
   async score(token: Token, clientIP?: string): Promise<Decision> {
-    const reasons: string[] = []
     const now = Date.now()
 
     // Token timestamp from the future — clocks don't run backwards; instant block
@@ -38,47 +50,55 @@ export class RiskEngine {
     }
 
     // Check instant-block signals first
-    const { score: automationScore, instantBlock } = scoreAutomation(
-      token.detection,
-      reasons,
-    )
+    const { score: automationScore, instantBlock, reasons: automationReasons } = scoreAutomation(token.detection)
 
     if (instantBlock) {
       return {
         decision: 'block',
         score: 100,
         instantBlock: true,
-        reasons,
+        reasons: automationReasons,
       }
     }
 
-    const fpScore = scoreFingerprint(token.fingerprint, reasons)
-    const behaviorScore = scoreBehavior(token.behavior, reasons)
+    const { score: fpScore, reasons: fpReasons } = scoreFingerprint(token.fingerprint)
+    const { score: behaviorScore, reasons: behaviorReasons } = scoreBehavior(token.behavior)
 
     // Token age: tokens older than 30s are suspect (replay attack or clock skew)
     let ageScore = 0
+    const ageReasons: string[] = []
     if (now - token.timestamp > 30_000) {
       ageScore = 10
-      reasons.push('token_too_old')
+      ageReasons.push('token_too_old')
     }
 
     let ipScore = 0
+    const ipReasons: string[] = []
     if (this._store && clientIP) {
-      const ipCount = await this._store.getIPCount(token.fingerprint.canvas.hash)
+      const fpHash = computeFingerprintHash(token)
+      const ipCount = await this._store.getIPCount(fpHash)
       if (ipCount > 100) {
         ipScore = 5
-        reasons.push(`fingerprint_seen_from_${ipCount}_ips`)
+        ipReasons.push(`fingerprint_seen_from_${ipCount}_ips`)
       }
     }
 
     const totalScore = automationScore + fpScore + behaviorScore + ageScore + ipScore
     const decision = this._classify(totalScore)
 
+    const allReasons = [
+      ...automationReasons,
+      ...fpReasons,
+      ...behaviorReasons,
+      ...ageReasons,
+      ...ipReasons,
+    ]
+
     return {
       decision,
       score: totalScore,
       instantBlock: false,
-      reasons,
+      reasons: allReasons,
     }
   }
 

@@ -4,15 +4,17 @@ const LOG2_8 = Math.log2(8)
 
 /**
  * Score behavioral signals.
+ * Returns score and the reasons array. Does NOT mutate any external state.
+ *
  *   No mouse/keyboard events in snapshot:    +15  no_interaction_events
  *   Mouse entropy too low (linear paths):    +15  mouse_entropy_too_low
  *   Keystroke timing too uniform (bot-like): +10  keystroke_timing_too_uniform
  */
 export function scoreBehavior(
   behavior: BehaviorData,
-  reasons: string[],
-): number {
+): { readonly score: number; readonly reasons: readonly string[] } {
   let score = 0
+  const reasons: string[] = []
 
   // No interaction events at all — strong bot signal
   if (behavior.totalMouseEvents === 0 && behavior.totalKeyboardEvents === 0) {
@@ -38,7 +40,7 @@ export function scoreBehavior(
     }
   }
 
-  return score
+  return { score, reasons }
 }
 
 /**

@@ -5,7 +5,18 @@ import {
   constants,
 } from 'node:crypto'
 import { inflateRawSync } from 'node:zlib'
-import type { Token, Fingerprint, DetectionData, BehaviorData } from '../model/types.js'
+import type {
+  Token,
+  Fingerprint,
+  DetectionData,
+  BehaviorData,
+  MouseEvent,
+  KeyboardEvent,
+  ScrollEvent,
+} from '../model/types.js'
+
+const MAX_TOKEN_SIZE = 65_536 // 64 KB
+const MAX_DECOMPRESSED_SIZE = 1_048_576 // 1 MB
 
 /**
  * Decrypt an encrypted token bundle from the client.
@@ -17,6 +28,11 @@ export function decryptToken(
 ): Token {
   // 1. base64url decode
   const raw = base64urlDecode(bundle)
+
+  // Token size limit — reject oversized bundles before any expensive ops
+  if (raw.length > MAX_TOKEN_SIZE) {
+    throw new Error(`decryptToken: bundle exceeds max size (${raw.length} > ${MAX_TOKEN_SIZE})`)
+  }
 
   // 2. Parse bundle: [wrappedKeyLen u16] [wrappedKey] [iv 12 bytes] [ciphertext+authTag]
   if (raw.length < 2) {
@@ -48,12 +64,12 @@ export function decryptToken(
 
   const decipher = createDecipheriv('aes-256-gcm', aesKeyBytes, iv)
   decipher.setAuthTag(authTag)
-  let plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  let plaintext: Buffer = Buffer.concat([decipher.update(ciphertext), decipher.final()])
 
-  // 5. Check for deflate-raw magic byte (0x78) and decompress if present
-  if (plaintext.readUInt8(0) === 0x78) {
-    plaintext = inflateRawSync(plaintext)
-  }
+  // 5. Attempt deflate-raw decompression. The client uses deflate-raw (no zlib header),
+  //    so we can't rely on a fixed magic byte. Try decompression; if it succeeds and the
+  //    result looks like a valid token (version 0x01 or JSON '{'), use decompressed data.
+  plaintext = tryDecompress(plaintext)
 
   // 6. Deserialize: check if v1 binary format (first byte is version 1)
   //    or JSON fallback (first byte is '{' = 0x7b)
@@ -70,12 +86,14 @@ export function decryptToken(
  * The client in dev mode sends a plain base64url-encoded JSON or binary token.
  */
 export function decryptTokenDev(base64urlToken: string): Token {
-  let bytes = base64urlDecode(base64urlToken)
+  const raw = base64urlDecode(base64urlToken)
 
-  // Decompress if deflate-raw magic
-  if (bytes.length > 0 && bytes.readUInt8(0) === 0x78) {
-    bytes = inflateRawSync(bytes)
+  // Token size limit
+  if (raw.length > MAX_TOKEN_SIZE) {
+    throw new Error(`decryptTokenDev: token exceeds max size (${raw.length} > ${MAX_TOKEN_SIZE})`)
   }
+
+  const bytes = tryDecompress(raw)
 
   if (bytes.length > 0 && bytes.readUInt8(0) === 0x01) {
     return deserializeBinary(bytes)
@@ -85,7 +103,37 @@ export function decryptTokenDev(base64urlToken: string): Token {
 }
 
 /**
- * Deserialize the v1 binary token format that mirrors the client's serialize output.
+ * Attempt deflate-raw decompression. The client uses deflate-raw (no zlib header),
+ * so there is no fixed magic byte to check. Try inflateRawSync; if it succeeds and
+ * the result starts with a valid token marker (0x01 or '{'), use the decompressed data.
+ * If decompression fails or the result doesn't look like a token, return the original.
+ * Always enforces MAX_DECOMPRESSED_SIZE.
+ */
+function tryDecompress(data: Buffer): Buffer {
+  try {
+    const decompressed = inflateRawSync(data) as Buffer
+    if (decompressed.length > MAX_DECOMPRESSED_SIZE) {
+      throw new Error(`tryDecompress: decompressed size ${decompressed.length} exceeds limit ${MAX_DECOMPRESSED_SIZE}`)
+    }
+    const firstByte = decompressed.length > 0 ? decompressed.readUInt8(0) : -1
+    // 0x01 = binary version byte, 0x7b = '{' (JSON)
+    if (firstByte === 0x01 || firstByte === 0x7b) {
+      return decompressed
+    }
+    // Decompressed but not a recognizable format — use original
+    return data
+  } catch (err) {
+    // Not compressed or invalid — use raw bytes
+    // Re-throw if it is our own size-limit error
+    if (err instanceof Error && err.message.startsWith('tryDecompress:')) {
+      throw err
+    }
+    return data
+  }
+}
+
+/**
+ * Deserialize the v1 binary token format that the client serializer writes.
  *
  * Binary layout (all strings are length-prefixed: u16 len then UTF-8 bytes):
  *   u8     version  (must be 0x01)
@@ -96,67 +144,63 @@ export function decryptTokenDev(base64urlToken: string): Token {
  *   --- Fingerprint ---
  *   str    canvas.hash
  *   str    webgl.hash
+ *   str    audio.hash          ← audio hash comes BEFORE webgl details
  *   str    webgl.renderer
  *   str    webgl.vendor
  *   str    webgl.version
  *   str    webgl.shadingLanguageVersion
  *   u16    webgl.extensions.length
  *   str[]  webgl.extensions
- *   str    audio.hash
  *   str    navigator.userAgent
  *   str    navigator.language
+ *   u16    navigator.hardwareConcurrency   (u16, not u32)
+ *   u16    navigator.maxTouchPoints        (u16, not u32)
+ *   u16    navigator.pluginCount           (u16, not u32)
+ *   u8     navigator.deviceMemory          (0 = null, else the value)
+ *   u8     navigator.cookieEnabled         (0/1)
  *   u16    navigator.languages.length
  *   str[]  navigator.languages
- *   str    navigator.platform
- *   u32    navigator.hardwareConcurrency
- *   u8     navigator.deviceMemory presence flag (0 = null, 1 = present)
- *   f64?   navigator.deviceMemory (if flag = 1)
- *   u32    navigator.maxTouchPoints
- *   u8     navigator.cookieEnabled (0/1)
- *   u8     navigator.doNotTrack presence flag (0 = null, 1 = present)
- *   str?   navigator.doNotTrack (if flag = 1)
- *   str    navigator.vendor
- *   u32    navigator.pluginCount
- *   u32    screen.width
- *   u32    screen.height
- *   u32    screen.colorDepth
- *   f64    screen.devicePixelRatio
- *   u64    fingerprint.collectedAt (as two u32s, high then low)
+ *   u16    screen.width
+ *   u16    screen.height
+ *   u16    screen.availWidth
+ *   u16    screen.availHeight
+ *   u8     screen.colorDepth
+ *   u8     screen.pixelDepth
+ *   u16    screen.devicePixelRatio * 100   (u16, not f64)
  *   --- DetectionData ---
  *   u8     isAutomated (0/1)
  *   u16    signals.length
  *   per signal:
  *     str  name
  *     u8   detected (0/1)
- *     u8   detail presence flag
- *     str? detail
+ *     (NO detail flag)
  *   u8     integrity.isValid (0/1)
  *   u16    violations.length
  *   per violation:
  *     str  name
- *     u8   detail presence flag
- *     str? detail
+ *     (NO detail flag)
  *   --- BehaviorData ---
  *   u16    mouse.length
  *   per mouse event:
  *     str  type
- *     f64  x
- *     f64  y
- *     f64  t
+ *     u16  x
+ *     u16  y
+ *     u32  t
+ *     u8   buttons
  *   u16    keyboard.length
  *   per keyboard event:
  *     str  type
  *     str  code
- *     f64  t
+ *     u32  t
  *   u16    scroll.length
  *   per scroll event:
- *     f64  x
- *     f64  y
- *     f64  t
+ *     u16  x
+ *     u16  y
+ *     u32  t
  *   u32    totalMouseEvents
  *   u32    totalKeyboardEvents
  *   u32    totalScrollEvents
- *   u64    snapshotAt (as two u32s, high then low)
+ *   u32    snapshotAt          (single u32, not u64)
  */
 function deserializeBinary(bytes: Buffer): Token {
   let pos = 0
@@ -177,19 +221,6 @@ function deserializeBinary(bytes: Buffer): Token {
     const val = bytes.readUInt32BE(pos)
     pos += 4
     return val
-  }
-
-  function readF64(): number {
-    const val = bytes.readDoubleBE(pos)
-    pos += 8
-    return val
-  }
-
-  function readU64(): number {
-    const high = readU32()
-    const low = readU32()
-    // Combine as a JS number (safe for timestamps within Number.MAX_SAFE_INTEGER)
-    return high * 0x1_0000_0000 + low
   }
 
   function readStr(): string {
@@ -214,37 +245,42 @@ function deserializeBinary(bytes: Buffer): Token {
     throw new Error(`deserializeBinary: unsupported version ${version}`)
   }
 
-  const timestamp = readU64()
+  // timestamp: high 32 bits + low 32 bits
+  const tsHigh = readU32()
+  const tsLow = readU32()
+  const timestamp = tsHigh * 0x1_0000_0000 + tsLow
+
   const nonce = readStr()
   const sdkVersion = readStr()
 
-  // Fingerprint
+  // Fingerprint — order matches client serializer exactly
   const canvasHash = readStr()
   const webglHash = readStr()
+  const audioHash = readStr()        // audio comes BEFORE webgl renderer
   const webglRenderer = readStr()
   const webglVendor = readStr()
   const webglVersion = readStr()
   const webglShadingLanguageVersion = readStr()
   const webglExtensions = readStrArray()
-  const audioHash = readStr()
+
   const navUserAgent = readStr()
   const navLanguage = readStr()
-  const navLanguages = readStrArray()
-  const navPlatform = readStr()
-  const hardwareConcurrency = readU32()
-  const deviceMemoryPresent = readU8()
-  const deviceMemory: number | null = deviceMemoryPresent === 1 ? readF64() : null
-  const maxTouchPoints = readU32()
+  const hardwareConcurrency = readU16()   // u16
+  const maxTouchPoints = readU16()        // u16
+  const pluginCount = readU16()           // u16
+  const deviceMemoryRaw = readU8()        // u8: 0 = null, else value
+  const deviceMemory: number | null = deviceMemoryRaw === 0 ? null : deviceMemoryRaw
   const cookieEnabled = readU8() === 1
-  const doNotTrackPresent = readU8()
-  const doNotTrack: string | null = doNotTrackPresent === 1 ? readStr() : null
-  const navVendor = readStr()
-  const pluginCount = readU32()
-  const screenWidth = readU32()
-  const screenHeight = readU32()
-  const screenColorDepth = readU32()
-  const devicePixelRatio = readF64()
-  const collectedAt = readU64()
+  const navLanguages = readStrArray()
+
+  const screenWidth = readU16()
+  const screenHeight = readU16()
+  const screenAvailWidth = readU16()
+  const screenAvailHeight = readU16()
+  const screenColorDepth = readU8()       // u8
+  const screenPixelDepth = readU8()       // u8
+  const devicePixelRatioRaw = readU16()   // u16: DPR * 100
+  const devicePixelRatio = devicePixelRatioRaw / 100
 
   const fingerprint: Fingerprint = {
     canvas: { hash: canvasHash },
@@ -261,43 +297,44 @@ function deserializeBinary(bytes: Buffer): Token {
       userAgent: navUserAgent,
       language: navLanguage,
       languages: navLanguages,
-      platform: navPlatform,
+      // platform, doNotTrack, vendor not in binary — set defaults
+      platform: '',
       hardwareConcurrency,
       deviceMemory,
       maxTouchPoints,
       cookieEnabled,
-      doNotTrack,
-      vendor: navVendor,
+      doNotTrack: null,
+      vendor: '',
       pluginCount,
     },
     screen: {
       width: screenWidth,
       height: screenHeight,
+      availWidth: screenAvailWidth,
+      availHeight: screenAvailHeight,
       colorDepth: screenColorDepth,
+      pixelDepth: screenPixelDepth,
       devicePixelRatio,
     },
-    collectedAt,
+    // collectedAt not in binary — use token timestamp as default
+    collectedAt: timestamp,
   }
 
-  // DetectionData
+  // DetectionData — no detail flag in binary
   const isAutomated = readU8() === 1
   const signalCount = readU16()
-  const signals = []
+  const signals: Array<{ readonly name: string; readonly detected: boolean }> = []
   for (let i = 0; i < signalCount; i++) {
     const name = readStr()
     const detected = readU8() === 1
-    const hasDetail = readU8() === 1
-    const detail = hasDetail ? readStr() : undefined
-    signals.push({ name, detected, ...(detail !== undefined ? { detail } : {}) })
+    signals.push({ name, detected })
   }
   const integrityValid = readU8() === 1
   const violationCount = readU16()
-  const violations = []
+  const violations: Array<{ readonly name: string }> = []
   for (let i = 0; i < violationCount; i++) {
     const name = readStr()
-    const hasDetail = readU8() === 1
-    const detail = hasDetail ? readStr() : undefined
-    violations.push({ name, ...(detail !== undefined ? { detail } : {}) })
+    violations.push({ name })
   }
 
   const detection: DetectionData = {
@@ -311,37 +348,38 @@ function deserializeBinary(bytes: Buffer): Token {
 
   // BehaviorData
   const mouseCount = readU16()
-  const mouse = []
+  const mouse: MouseEvent[] = []
   for (let i = 0; i < mouseCount; i++) {
     const type = readStr()
-    const x = readF64()
-    const y = readF64()
-    const t = readF64()
-    mouse.push({ type, x, y, t })
+    const x = readU16()
+    const y = readU16()
+    const t = readU32()
+    const buttons = readU8()
+    mouse.push({ type, x, y, t, buttons })
   }
 
   const keyboardCount = readU16()
-  const keyboard = []
+  const keyboard: KeyboardEvent[] = []
   for (let i = 0; i < keyboardCount; i++) {
     const type = readStr()
     const code = readStr()
-    const t = readF64()
+    const t = readU32()
     keyboard.push({ type, code, t })
   }
 
   const scrollCount = readU16()
-  const scroll = []
+  const scroll: ScrollEvent[] = []
   for (let i = 0; i < scrollCount; i++) {
-    const x = readF64()
-    const y = readF64()
-    const t = readF64()
+    const x = readU16()
+    const y = readU16()
+    const t = readU32()
     scroll.push({ x, y, t })
   }
 
   const totalMouseEvents = readU32()
   const totalKeyboardEvents = readU32()
   const totalScrollEvents = readU32()
-  const snapshotAt = readU64()
+  const snapshotAt = readU32()  // single u32, not u64
 
   const behavior: BehaviorData = {
     mouse,

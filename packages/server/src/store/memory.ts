@@ -1,26 +1,69 @@
 import type { FingerprintStore } from '../model/types.js'
 
+const DEFAULT_MAX_ENTRIES = 10_000
+const DEFAULT_TTL_MS = 86_400_000 // 24 hours
+
+interface StoreEntry {
+  readonly ips: Set<string>
+  readonly createdAt: number
+}
+
+export interface MemoryStoreOptions {
+  readonly maxEntries?: number
+  readonly ttlMs?: number
+}
+
 /**
  * In-memory fingerprint store. Suitable for development and testing.
  * Replace with Redis adapter for production use.
+ *
+ * Features:
+ *   - maxEntries: evicts oldest entries when capacity is exceeded (default 10_000)
+ *   - ttlMs: entries older than this are considered stale and excluded (default 24h)
  */
 export class MemoryStore implements FingerprintStore {
-  private readonly _ipSets = new Map<string, Set<string>>()
+  private readonly _entries = new Map<string, StoreEntry>()
+  private readonly _maxEntries: number
+  private readonly _ttlMs: number
+
+  constructor(options?: MemoryStoreOptions) {
+    this._maxEntries = options?.maxEntries ?? DEFAULT_MAX_ENTRIES
+    this._ttlMs = options?.ttlMs ?? DEFAULT_TTL_MS
+  }
 
   async saveFingerprint(fingerprintHash: string, ip: string): Promise<void> {
-    const existing = this._ipSets.get(fingerprintHash)
+    const existing = this._entries.get(fingerprintHash)
     if (existing) {
-      existing.add(ip)
+      existing.ips.add(ip)
     } else {
-      this._ipSets.set(fingerprintHash, new Set([ip]))
+      // Evict oldest entry if at capacity
+      if (this._entries.size >= this._maxEntries) {
+        const oldestKey = this._entries.keys().next().value
+        if (oldestKey !== undefined) {
+          this._entries.delete(oldestKey)
+        }
+      }
+      this._entries.set(fingerprintHash, {
+        ips: new Set([ip]),
+        createdAt: Date.now(),
+      })
     }
   }
 
   async getIPCount(fingerprintHash: string): Promise<number> {
-    return this._ipSets.get(fingerprintHash)?.size ?? 0
+    const entry = this._entries.get(fingerprintHash)
+    if (!entry) return 0
+
+    // Evict stale entries
+    if (entry.createdAt + this._ttlMs < Date.now()) {
+      this._entries.delete(fingerprintHash)
+      return 0
+    }
+
+    return entry.ips.size
   }
 
   clear(): void {
-    this._ipSets.clear()
+    this._entries.clear()
   }
 }

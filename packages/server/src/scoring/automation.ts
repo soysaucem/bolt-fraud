@@ -23,14 +23,15 @@ const SCORED_SIGNALS: ReadonlyMap<string, number> = new Map([
 
 /**
  * Score automation detection signals.
- * Returns score and whether to instant-block.
+ * Returns score, whether to instant-block, and the reasons array.
+ * Does NOT mutate any external state.
  */
 export function scoreAutomation(
   detection: DetectionData,
-  reasons: string[],
-): { score: number; instantBlock: boolean } {
+): { readonly score: number; readonly instantBlock: boolean; readonly reasons: readonly string[] } {
   let score = 0
   let instantBlock = false
+  const reasons: string[] = []
 
   // Check automation signals
   if (detection.isAutomated) {
@@ -64,5 +65,5 @@ export function scoreAutomation(
     }
   }
 
-  return { score, instantBlock }
+  return { score, instantBlock, reasons }
 }

@@ -2,6 +2,7 @@ import type { Fingerprint } from '../model/types.js'
 
 /**
  * Score fingerprint consistency signals.
+ * Returns score and the reasons array. Does NOT mutate any external state.
  *
  * Score contributions:
  *   canvas empty/zero:                          +25  canvas_fingerprint_empty
@@ -14,9 +15,9 @@ import type { Fingerprint } from '../model/types.js'
  */
 export function scoreFingerprint(
   fp: Fingerprint,
-  reasons: string[],
-): number {
+): { readonly score: number; readonly reasons: readonly string[] } {
   let score = 0
+  const reasons: string[] = []
 
   const canvasEmpty = fp.canvas.hash === '' || fp.canvas.hash === '0'
   const webglEmpty = fp.webgl.hash === '' || fp.webgl.renderer === ''
@@ -71,5 +72,5 @@ export function scoreFingerprint(
     reasons.push('headless_default_dpr')
   }
 
-  return score
+  return { score, reasons }
 }

@@ -36,7 +36,10 @@ export interface Fingerprint {
   readonly screen: {
     readonly width: number
     readonly height: number
+    readonly availWidth: number
+    readonly availHeight: number
     readonly colorDepth: number
+    readonly pixelDepth: number
     readonly devicePixelRatio: number
   }
   readonly collectedAt: number
@@ -62,10 +65,30 @@ export interface IntegrityViolation {
   readonly detail?: string
 }
 
+export interface MouseEvent {
+  readonly type: string
+  readonly x: number
+  readonly y: number
+  readonly t: number
+  readonly buttons: number
+}
+
+export interface KeyboardEvent {
+  readonly type: string
+  readonly code: string
+  readonly t: number
+}
+
+export interface ScrollEvent {
+  readonly x: number
+  readonly y: number
+  readonly t: number
+}
+
 export interface BehaviorData {
-  readonly mouse: readonly { readonly type: string; readonly x: number; readonly y: number; readonly t: number }[]
-  readonly keyboard: readonly { readonly type: string; readonly code: string; readonly t: number }[]
-  readonly scroll: readonly { readonly x: number; readonly y: number; readonly t: number }[]
+  readonly mouse: readonly MouseEvent[]
+  readonly keyboard: readonly KeyboardEvent[]
+  readonly scroll: readonly ScrollEvent[]
   readonly totalMouseEvents: number
   readonly totalKeyboardEvents: number
   readonly totalScrollEvents: number
