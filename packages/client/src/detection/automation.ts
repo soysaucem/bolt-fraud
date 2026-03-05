@@ -12,7 +12,7 @@ export async function detectAutomation(): Promise<AutomationResult> {
     signals.push({ name, detected, detail })
   }
 
-  const w = window as Record<string, unknown>
+  const w = window as unknown as Record<string, unknown>
 
   // 1. WebDriver flag (set by ChromeDriver, GeckoDriver, etc.)
   push('webdriver_present', navigator.webdriver === true)

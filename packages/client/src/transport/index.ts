@@ -28,7 +28,7 @@ async function tryCompress(bytes: Uint8Array): Promise<Uint8Array> {
     const writer = cs.writable.getWriter()
     const reader = cs.readable.getReader()
 
-    await writer.write(bytes)
+    await writer.write(bytes as Uint8Array<ArrayBuffer>)
     await writer.close()
 
     const chunks: Uint8Array[] = []

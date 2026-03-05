@@ -10,6 +10,9 @@ import type {
  * Binary serialization for TokenPayload using DataView with big-endian byte order.
  * Reference: sws-chunk-6476.js module 5907
  */
+
+const textEncoder = new TextEncoder()
+
 export function serialize(payload: TokenPayload): Uint8Array {
   const writer = new BinaryWriter()
 
@@ -129,8 +132,10 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   const reader = new BinaryReader(bytes)
 
   // Format version
-  const _version = reader.readU8()
-  void _version
+  const version = reader.readU8()
+  if (version !== 1) {
+    throw new Error(`Unsupported binary format version: ${version}`)
+  }
 
   // Timestamp
   const high = reader.readU32()
@@ -321,7 +326,7 @@ export class BinaryWriter {
   }
 
   writeStr(value: string): void {
-    const encoded = new TextEncoder().encode(value)
+    const encoded = textEncoder.encode(value)
     this.writeU16(encoded.length)
     this._ensureCapacity(encoded.length)
     new Uint8Array(this._buf, this._offset, encoded.length).set(encoded)

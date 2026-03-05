@@ -20,7 +20,7 @@ export function installFetchHook(config: BoltFraudConfig): void {
       const { getToken } = await import('../index.js')
       const token = await getToken()
       const headers = new Headers(init?.headers)
-      headers.set(config.tokenHeader ?? 'X-Bolt-Token', JSON.stringify(token))
+      headers.set(config.tokenHeader ?? 'X-Client-Data', JSON.stringify(token))
       return _originalFetch!(input, { ...init, headers })
     }
     return _originalFetch!(input, init)
@@ -58,12 +58,19 @@ export function installXHRHook(config: BoltFraudConfig): void {
     const self = this
     const url = urlMap.get(self)
     if (url !== undefined && shouldProtect(url, config)) {
-      // Inject the token header synchronously — best effort, no await
+      // Defer send until token is ready to avoid the race condition where
+      // the async token injection completes after originalSend has already fired.
       void (async () => {
-        const { getToken } = await import('../index.js')
-        const token = await getToken()
-        self.setRequestHeader(config.tokenHeader ?? 'X-Bolt-Token', JSON.stringify(token))
+        try {
+          const { getToken } = await import('../index.js')
+          const token = await getToken()
+          self.setRequestHeader(config.tokenHeader ?? 'X-Client-Data', JSON.stringify(token))
+        } catch {
+          // Token generation failed — send without token
+        }
+        originalSend.call(self, body)
       })()
+      return // Don't call originalSend synchronously
     }
     return originalSend.call(self, body)
   }

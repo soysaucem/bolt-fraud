@@ -24,7 +24,7 @@ export async function encrypt(
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     aesKey,
-    plaintext,
+    new Uint8Array(plaintext).buffer as ArrayBuffer,
   )
 
   const wrappedKey = await crypto.subtle.wrapKey('raw', aesKey, rsaKey, {
