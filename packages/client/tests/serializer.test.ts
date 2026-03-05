@@ -444,3 +444,39 @@ describe('serialize / deserialize round-trip', () => {
     expect(restored.fingerprint.webgl.extensions).toEqual([])
   })
 })
+
+// ─── deserialize version validation ───────────────────────────────────────────
+
+describe('deserialize version validation', () => {
+  it('throws when binary data starts with unsupported version byte 0x02', () => {
+    // Arrange: craft a minimal byte array where the first byte (version) is 0x02
+    const invalidVersionBytes = new Uint8Array([0x02, 0x00, 0x00, 0x00, 0x00])
+
+    // Act + Assert
+    expect(() => deserialize(invalidVersionBytes)).toThrow(
+      'Unsupported binary format version: 2',
+    )
+  })
+
+  it('throws when binary data starts with version byte 0x00', () => {
+    // Arrange: version 0 is also unsupported
+    const invalidVersionBytes = new Uint8Array([0x00, 0x00])
+
+    // Act + Assert
+    expect(() => deserialize(invalidVersionBytes)).toThrow(
+      'Unsupported binary format version: 0',
+    )
+  })
+
+  it('does not throw for a valid serialized payload (version 0x01)', () => {
+    // Arrange: a properly serialized payload starts with version byte 0x01
+    const payload = createMockTokenPayload()
+    const bytes = serialize(payload)
+
+    // Assert: first byte is 0x01
+    expect(bytes[0]).toBe(0x01)
+
+    // Act + Assert: no throw
+    expect(() => deserialize(bytes)).not.toThrow()
+  })
+})

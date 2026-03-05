@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
-import { isNativeFunction } from '../src/detection/integrity.js'
+import { describe, it, expect, afterEach } from 'vitest'
+import { isNativeFunction, validateIntegrity } from '../src/detection/integrity.js'
 
 // ─── isNativeFunction ─────────────────────────────────────────────────────────
 
@@ -106,5 +106,75 @@ describe('isNativeFunction', () => {
     if (typeof XMLHttpRequest !== 'undefined') {
       expect(isNativeFunction(XMLHttpRequest.prototype.open)).toBe(true)
     }
+  })
+})
+
+// ─── validateIntegrity ────────────────────────────────────────────────────────
+
+describe('validateIntegrity', () => {
+  // Save originals to restore after each test
+  let originalDateNow: typeof Date.now
+  let originalPerformanceNow: typeof performance.now
+
+  afterEach(() => {
+    // Restore any overridden native functions
+    if (originalDateNow) {
+      Date.now = originalDateNow
+    }
+    if (originalPerformanceNow && typeof performance !== 'undefined') {
+      performance.now = originalPerformanceNow
+    }
+  })
+
+  it('returns an IntegrityResult with required fields (isValid and violations array)', async () => {
+    // Arrange: default jsdom environment
+    // Act
+    const result = await validateIntegrity()
+
+    // Assert: result has correct shape regardless of jsdom API nativeness
+    expect(typeof result.isValid).toBe('boolean')
+    expect(Array.isArray(result.violations)).toBe(true)
+    // isValid must be consistent with violations array
+    expect(result.isValid).toBe(result.violations.length === 0)
+  })
+
+  it('isNativeFunction returns true for native built-ins and false for user functions', () => {
+    // Verify the helper used by validateIntegrity works correctly
+    // Native built-ins
+    expect(isNativeFunction(Array.prototype.push)).toBe(true)
+    expect(isNativeFunction(JSON.stringify)).toBe(true)
+
+    // User functions
+    expect(isNativeFunction(() => {})).toBe(false)
+    expect(isNativeFunction(function custom() { return 1 })).toBe(false)
+  })
+
+  it('returns isValid: false and includes date_now_overridden when Date.now is overridden', async () => {
+    // Arrange: replace Date.now with a user-defined function
+    originalDateNow = Date.now
+    Date.now = function customDateNow() { return 9999999 }
+
+    // Act
+    const result = await validateIntegrity()
+
+    // Assert
+    expect(result.isValid).toBe(false)
+    const violationNames = result.violations.map((v) => v.name)
+    expect(violationNames).toContain('date_now_overridden')
+  })
+
+  it('returns isValid: false and includes performance_now_overridden when performance.now is overridden', async () => {
+    // Arrange: replace performance.now with a user-defined function
+    if (typeof performance === 'undefined') return // skip in environments without performance
+    originalPerformanceNow = performance.now
+    performance.now = function customPerformanceNow() { return 42 }
+
+    // Act
+    const result = await validateIntegrity()
+
+    // Assert
+    expect(result.isValid).toBe(false)
+    const violationNames = result.violations.map((v) => v.name)
+    expect(violationNames).toContain('performance_now_overridden')
   })
 })
