@@ -14,7 +14,7 @@ graph LR
     SDK -->|encrypt| TK[Token]
   end
 
-  TK -->|x-bolt-token header| API[Your API]
+  TK -->|x-client-data header| API[Your API]
 
   subgraph Server
     API --> Guard["@bolt-fraud/adapter-nestjs"]
@@ -78,7 +78,7 @@ The SDK automatically:
 - Validates browser API integrity (prototype chains, native functions)
 - Tracks mouse, keyboard, and scroll behavior in ring buffers
 - Serializes to compact binary, encrypts with AES-256-GCM + RSA-OAEP
-- Injects `x-bolt-token` header into outgoing requests
+- Injects `x-client-data` header into outgoing requests
 
 ### 4. Server Verification
 
@@ -94,7 +94,7 @@ const bf = createBoltFraud({
 })
 
 // In your request handler:
-const decision = await bf.verify(req.headers['x-bolt-token'], req.ip)
+const decision = await bf.verify(req.headers['x-client-data'], req.ip)
 
 if (decision.decision === 'block') {
   return res.status(403).json({ error: 'blocked' })
@@ -125,13 +125,13 @@ Protect routes with the guard:
 
 ```typescript
 import { Controller, Get } from '@nestjs/common'
-import { Protected, BoltFraudDecision } from '@bolt-fraud/adapter-nestjs'
+import { BoltFraudProtected, BoltFraudDecision } from '@bolt-fraud/adapter-nestjs'
 import type { Decision } from '@bolt-fraud/server'
 
 @Controller('api')
 export class ApiController {
   @Get('protected')
-  @Protected()
+  @BoltFraudProtected()
   handler(@BoltFraudDecision() decision: Decision) {
     // decision.score, decision.reasons, etc.
     return { status: 'ok', riskScore: decision.score }

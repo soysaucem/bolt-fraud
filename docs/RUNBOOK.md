@@ -103,7 +103,7 @@ Monitor the `reasons` array in decisions. Common patterns:
 ### All Requests Blocked
 
 1. **Check key configuration**: Ensure private key matches the public key used by clients
-2. **Check token header**: Verify client sends `x-bolt-token` header
+2. **Check token header**: Verify client sends `x-client-data` header
 3. **Check thresholds**: May be too aggressive; try raising `blockThreshold`
 4. **Check clock sync**: Token age check fails if server/client clocks differ by >30s
 

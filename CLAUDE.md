@@ -38,7 +38,7 @@ graph TD
 | `packages/server/src/scoring/behavior.ts` | Behavioral analysis (entropy, timing) |
 | `packages/server/src/store/memory.ts` | In-memory FingerprintStore implementation |
 | `packages/adapter-nestjs/src/bolt-fraud.module.ts` | NestJS DynamicModule (forRoot/forRootAsync) |
-| `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | CanActivate guard — reads x-bolt-token, calls verify |
+| `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | CanActivate guard — reads x-client-data, calls verify |
 | `packages/adapter-nestjs/src/bolt-fraud.decorator.ts` | @Protected(), @BoltFraudDecision() decorators |
 
 ## Commands
