@@ -7,20 +7,22 @@ import {
   HttpStatus,
 } from '@nestjs/common'
 import type { BoltFraud } from '@bolt-fraud/server'
-import { BOLT_FRAUD_INSTANCE } from './bolt-fraud.module.js'
+import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER } from './bolt-fraud.module.js'
 
-const DEFAULT_TOKEN_HEADER = 'x-bolt-token'
+const MAX_TOKEN_LENGTH = 65_536 // 64KB base64 encoded
 
 @Injectable()
 export class BoltFraudGuard implements CanActivate {
   constructor(
     @Inject(BOLT_FRAUD_INSTANCE)
     private readonly boltFraud: BoltFraud,
+    @Inject(BOLT_FRAUD_TOKEN_HEADER)
+    private readonly tokenHeader: string,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
-    const token = request.headers[DEFAULT_TOKEN_HEADER]
+    const token = request.headers[this.tokenHeader]
 
     if (!token || typeof token !== 'string') {
       throw new HttpException(
@@ -29,17 +31,24 @@ export class BoltFraudGuard implements CanActivate {
       )
     }
 
+    if (token.length > MAX_TOKEN_LENGTH) {
+      throw new HttpException(
+        { decision: 'block', reason: 'token_too_large' },
+        HttpStatus.BAD_REQUEST,
+      )
+    }
+
     const clientIP = request.ip ?? request.connection?.remoteAddress
     const decision = await this.boltFraud.verify(token, clientIP)
 
     if (decision.decision === 'block') {
       throw new HttpException(
-        { decision: 'block', reasons: decision.reasons },
+        { decision: 'block', reason: 'request_blocked' },
         HttpStatus.FORBIDDEN,
       )
     }
 
-    // Attach decision to request for downstream use
+    // Attach decision to request for downstream use via @BoltFraudDecision()
     request.boltFraudDecision = decision
     return true
   }

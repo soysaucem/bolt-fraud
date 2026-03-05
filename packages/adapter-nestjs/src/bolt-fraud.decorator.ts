@@ -22,9 +22,9 @@ export const BoltFraudDecision = createParamDecorator(
  *
  * Usage:
  *   @Get()
- *   @Protected()
+ *   @BoltFraudProtected()
  *   handler() { ... }
  */
-export function Protected(): MethodDecorator {
+export function BoltFraudProtected(): MethodDecorator {
   return applyDecorators(UseGuards(BoltFraudGuard))
 }

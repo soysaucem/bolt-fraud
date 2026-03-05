@@ -1,6 +1,11 @@
-export { BoltFraudModule, BOLT_FRAUD_INSTANCE } from './bolt-fraud.module.js'
+export {
+  BoltFraudModule,
+  BOLT_FRAUD_INSTANCE,
+  BOLT_FRAUD_TOKEN_HEADER,
+  type BoltFraudModuleConfig,
+} from './bolt-fraud.module.js'
 export { BoltFraudGuard } from './bolt-fraud.guard.js'
-export { BoltFraudDecision, Protected } from './bolt-fraud.decorator.js'
+export { BoltFraudDecision, BoltFraudProtected } from './bolt-fraud.decorator.js'
 
 // Re-export key types from @bolt-fraud/server for convenience
 export type {
