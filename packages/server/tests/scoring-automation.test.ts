@@ -8,15 +8,14 @@ describe('scoreAutomation', () => {
   it('returns score 0 and no instant block when no signals detected', () => {
     // Arrange
     const detection = createMockDetection()
-    const reasons: string[] = []
 
     // Act
-    const result = scoreAutomation(detection, reasons)
+    const result = scoreAutomation(detection)
 
     // Assert
     expect(result.score).toBe(0)
     expect(result.instantBlock).toBe(false)
-    expect(reasons).toHaveLength(0)
+    expect(result.reasons).toHaveLength(0)
   })
 
   it('returns score 0 and no instant block when isAutomated is false even if signals exist', () => {
@@ -25,10 +24,9 @@ describe('scoreAutomation', () => {
       isAutomated: false,
       signals: [createAutomationSignal('webdriver_present', true)],
     })
-    const reasons: string[] = []
 
     // Act
-    const result = scoreAutomation(detection, reasons)
+    const result = scoreAutomation(detection)
 
     // Assert: the outer isAutomated guard prevents processing signals
     expect(result.instantBlock).toBe(false)
@@ -48,15 +46,14 @@ describe('scoreAutomation', () => {
         isAutomated: true,
         signals: [createAutomationSignal(signalName, true)],
       })
-      const reasons: string[] = []
 
       // Act
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       // Assert
       expect(result.instantBlock).toBe(true)
       expect(result.score).toBe(0) // automation scoring itself doesn't add to score
-      expect(reasons).toContain(`instant_block:${signalName}`)
+      expect(result.reasons).toContain(`instant_block:${signalName}`)
     })
 
     it('does not trigger instant block for user_agent_headless (not in instant-block set)', () => {
@@ -64,12 +61,11 @@ describe('scoreAutomation', () => {
         isAutomated: true,
         signals: [createAutomationSignal('user_agent_headless', true)],
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
-      expect(reasons).toHaveLength(0)
+      expect(result.reasons).toHaveLength(0)
     })
 
     it('does not trigger instant block for stack_trace_headless (not in instant-block set)', () => {
@@ -77,9 +73,8 @@ describe('scoreAutomation', () => {
         isAutomated: true,
         signals: [createAutomationSignal('stack_trace_headless', true)],
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
     })
@@ -90,12 +85,11 @@ describe('scoreAutomation', () => {
         isAutomated: true,
         signals: [createAutomationSignal('webdriver_present', false)],
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
-      expect(reasons).toHaveLength(0)
+      expect(result.reasons).toHaveLength(0)
     })
 
     it('is idempotent: multiple instant-block signals still result in instantBlock=true', () => {
@@ -107,14 +101,13 @@ describe('scoreAutomation', () => {
           createAutomationSignal('selenium_runtime', true),
         ],
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(true)
-      expect(reasons).toContain('instant_block:webdriver_present')
-      expect(reasons).toContain('instant_block:puppeteer_runtime')
-      expect(reasons).toContain('instant_block:selenium_runtime')
+      expect(result.reasons).toContain('instant_block:webdriver_present')
+      expect(result.reasons).toContain('instant_block:puppeteer_runtime')
+      expect(result.reasons).toContain('instant_block:selenium_runtime')
     })
   })
 
@@ -128,12 +121,11 @@ describe('scoreAutomation', () => {
           violations: [{ name: 'native_function_toString_overridden' }],
         },
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(true)
-      expect(reasons).toContain('instant_block:native_function_toString_overridden')
+      expect(result.reasons).toContain('instant_block:native_function_toString_overridden')
     })
 
     it('triggers instant block when window_event_target_chain_broken violation is present', () => {
@@ -144,12 +136,11 @@ describe('scoreAutomation', () => {
           violations: [{ name: 'window_event_target_chain_broken' }],
         },
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(true)
-      expect(reasons).toContain('instant_block:window_event_target_chain_broken')
+      expect(result.reasons).toContain('instant_block:window_event_target_chain_broken')
     })
 
     it('triggers instant block when document_node_chain_broken violation is present', () => {
@@ -160,12 +151,11 @@ describe('scoreAutomation', () => {
           violations: [{ name: 'document_node_chain_broken' }],
         },
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(true)
-      expect(reasons).toContain('instant_block:document_node_chain_broken')
+      expect(result.reasons).toContain('instant_block:document_node_chain_broken')
     })
 
     it('does not trigger instant block for non-critical violations like fetch_native_overridden', () => {
@@ -176,9 +166,8 @@ describe('scoreAutomation', () => {
           violations: [{ name: 'fetch_native_overridden' }],
         },
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
     })
@@ -191,12 +180,11 @@ describe('scoreAutomation', () => {
           violations: [{ name: 'native_function_toString_overridden' }],
         },
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
-      expect(reasons).toHaveLength(0)
+      expect(result.reasons).toHaveLength(0)
     })
   })
 
@@ -210,13 +198,96 @@ describe('scoreAutomation', () => {
           violations: [{ name: 'native_function_toString_overridden' }],
         },
       })
-      const reasons: string[] = []
 
-      const result = scoreAutomation(detection, reasons)
+      const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(true)
-      expect(reasons).toContain('instant_block:webdriver_present')
-      expect(reasons).toContain('instant_block:native_function_toString_overridden')
+      expect(result.reasons).toContain('instant_block:webdriver_present')
+      expect(result.reasons).toContain('instant_block:native_function_toString_overridden')
+    })
+  })
+
+  describe('SCORED_SIGNALS: signals that add score instead of instant block', () => {
+    it('adds +10 score for languages_empty signal when isAutomated=true', () => {
+      // Arrange: languages_empty is in SCORED_SIGNALS with contribution 10
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [createAutomationSignal('languages_empty', true)],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert: scored signal — no instant block, +10 score, reason pushed
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(10)
+      expect(result.reasons).toContain('languages_empty')
+    })
+
+    it('adds +10 score for connection_rtt_zero signal when isAutomated=true', () => {
+      // Arrange: connection_rtt_zero is in SCORED_SIGNALS with contribution 10
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [createAutomationSignal('connection_rtt_zero', true)],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(10)
+      expect(result.reasons).toContain('connection_rtt_zero')
+    })
+
+    it('adds +20 total when both languages_empty and connection_rtt_zero are detected', () => {
+      // Arrange: both SCORED_SIGNALS detected together
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [
+          createAutomationSignal('languages_empty', true),
+          createAutomationSignal('connection_rtt_zero', true),
+        ],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(20)
+      expect(result.reasons).toContain('languages_empty')
+      expect(result.reasons).toContain('connection_rtt_zero')
+    })
+
+    it('does NOT score languages_empty when isAutomated=false', () => {
+      // Arrange: the isAutomated guard prevents scored signals from firing
+      const detection = createMockDetection({
+        isAutomated: false,
+        signals: [createAutomationSignal('languages_empty', true)],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert
+      expect(result.score).toBe(0)
+      expect(result.reasons).not.toContain('languages_empty')
+    })
+
+    it('does NOT score languages_empty when detected=false', () => {
+      // Arrange: signal present in array but not detected
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [createAutomationSignal('languages_empty', false)],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert
+      expect(result.score).toBe(0)
+      expect(result.reasons).not.toContain('languages_empty')
     })
   })
 })

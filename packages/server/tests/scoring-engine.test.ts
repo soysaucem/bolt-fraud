@@ -301,6 +301,74 @@ describe('RiskEngine', () => {
     })
   })
 
+  describe('token age scoring', () => {
+    it('adds token_too_old reason and +10 score when token timestamp is more than 30 seconds old', async () => {
+      // Arrange: set timestamp to 31 seconds in the past
+      const engine = new RiskEngine()
+      const oldTimestamp = Date.now() - 31_000
+      const token = createMockToken({ timestamp: oldTimestamp })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert: +10 for age
+      expect(decision.score).toBe(10)
+      expect(decision.reasons).toContain('token_too_old')
+    })
+
+    it('does NOT add token_too_old when token is exactly 30 seconds old (boundary: must be > 30s)', async () => {
+      // Arrange: exactly 30 seconds old — the check is `now - timestamp > 30_000` (strictly greater)
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() - 30_000 })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert: 30000ms is NOT > 30000, so no age penalty
+      expect(decision.reasons).not.toContain('token_too_old')
+    })
+
+    it('adds token_too_old when token is 5 minutes old', async () => {
+      // Arrange: very stale token (e.g. replay attack)
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() - 300_000 })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert
+      expect(decision.reasons).toContain('token_too_old')
+      expect(decision.score).toBeGreaterThanOrEqual(10)
+    })
+
+    it('returns instant block with token_timestamp_future when token has a future timestamp', async () => {
+      // Arrange: timestamp 10 seconds into the future — clocks don't run backward
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() + 10_000 })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert: should be instant block
+      expect(decision.decision).toBe('block')
+      expect(decision.instantBlock).toBe(true)
+      expect(decision.score).toBe(100)
+      expect(decision.reasons).toContain('token_timestamp_future')
+    })
+
+    it('does NOT instant block when future timestamp is within the 5000ms tolerance', async () => {
+      // Arrange: 4 seconds in the future — within the 5000ms grace window
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() + 4_000 })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert: no instant block from future timestamp check
+      expect(decision.reasons).not.toContain('token_timestamp_future')
+    })
+  })
+
   describe('instant block takes priority over all other scoring', () => {
     it('returns block immediately without computing fingerprint or behavior scores', async () => {
       // Arrange: both instant-block signal AND bad fingerprint — should still be instant block

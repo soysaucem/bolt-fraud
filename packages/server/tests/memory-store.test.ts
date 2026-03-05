@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { MemoryStore } from '../src/store/memory.js'
 
 // ─── MemoryStore ──────────────────────────────────────────────────────────────
@@ -138,5 +138,103 @@ describe('MemoryStore', () => {
       }
       expect(await store.getIPCount('fp-popular')).toBe(ipCount)
     })
+  })
+})
+
+// ─── TTL expiration ───────────────────────────────────────────────────────────
+
+describe('MemoryStore TTL expiration', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('getIPCount returns 0 after TTL has elapsed', async () => {
+    // Arrange: create a store with a very short TTL (100ms)
+    const store = new MemoryStore({ ttlMs: 100 })
+
+    // Save a fingerprint at the "current" time
+    await store.saveFingerprint('fp-ttl', '10.0.0.1')
+
+    // Verify it's stored
+    expect(await store.getIPCount('fp-ttl')).toBe(1)
+
+    // Advance fake time past the TTL
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(150)
+
+    // Act: getIPCount should evict the stale entry and return 0
+    const count = await store.getIPCount('fp-ttl')
+
+    // Assert
+    expect(count).toBe(0)
+  })
+
+  it('entry is not evicted before TTL has elapsed', async () => {
+    // Arrange: TTL = 500ms
+    const store = new MemoryStore({ ttlMs: 500 })
+    await store.saveFingerprint('fp-fresh', '10.0.0.2')
+
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(200) // only 200ms elapsed, TTL not reached
+
+    // Act
+    const count = await store.getIPCount('fp-fresh')
+
+    // Assert: still alive
+    expect(count).toBe(1)
+  })
+})
+
+// ─── Max entries eviction ─────────────────────────────────────────────────────
+
+describe('MemoryStore max entries eviction', () => {
+  it('evicts the oldest entry when maxEntries is exceeded', async () => {
+    // Arrange: store with maxEntries=2
+    const store = new MemoryStore({ maxEntries: 2 })
+
+    // Save first two fingerprints (fills capacity)
+    await store.saveFingerprint('fp-oldest', '1.1.1.1')
+    await store.saveFingerprint('fp-second', '2.2.2.2')
+
+    // Verify both are present
+    expect(await store.getIPCount('fp-oldest')).toBe(1)
+    expect(await store.getIPCount('fp-second')).toBe(1)
+
+    // Act: saving a third fingerprint should evict the oldest
+    await store.saveFingerprint('fp-newest', '3.3.3.3')
+
+    // Assert: oldest entry is gone, newer entries remain
+    expect(await store.getIPCount('fp-oldest')).toBe(0)
+    expect(await store.getIPCount('fp-second')).toBe(1)
+    expect(await store.getIPCount('fp-newest')).toBe(1)
+  })
+
+  it('does not evict when under capacity', async () => {
+    // Arrange: store with maxEntries=3, only 2 saved
+    const store = new MemoryStore({ maxEntries: 3 })
+    await store.saveFingerprint('fp-a', '1.1.1.1')
+    await store.saveFingerprint('fp-b', '2.2.2.2')
+
+    // Act + Assert: both should still be present
+    expect(await store.getIPCount('fp-a')).toBe(1)
+    expect(await store.getIPCount('fp-b')).toBe(1)
+  })
+
+  it('can evict multiple times, each time removing the oldest', async () => {
+    // Arrange: maxEntries=1 — each new entry evicts the previous
+    const store = new MemoryStore({ maxEntries: 1 })
+
+    await store.saveFingerprint('fp-1', '1.1.1.1')
+    expect(await store.getIPCount('fp-1')).toBe(1)
+
+    // Second save evicts fp-1
+    await store.saveFingerprint('fp-2', '2.2.2.2')
+    expect(await store.getIPCount('fp-1')).toBe(0)
+    expect(await store.getIPCount('fp-2')).toBe(1)
+
+    // Third save evicts fp-2
+    await store.saveFingerprint('fp-3', '3.3.3.3')
+    expect(await store.getIPCount('fp-2')).toBe(0)
+    expect(await store.getIPCount('fp-3')).toBe(1)
   })
 })
