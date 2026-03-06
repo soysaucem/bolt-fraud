@@ -150,6 +150,11 @@ function buildBinaryToken(overrides?: {
   w.writeU16(langs.length)
   for (const l of langs) w.writeStr(l)
 
+  // v2 navigator fields
+  w.writeStr('MacIntel')           // platform
+  w.writeStr('Apple Computer, Inc.') // vendor
+  w.writeStr('')                    // doNotTrack (empty = null)
+
   // Screen
   w.writeU16(overrides?.screenWidth ?? 1920)
   w.writeU16(overrides?.screenHeight ?? 1080)
@@ -158,6 +163,11 @@ function buildBinaryToken(overrides?: {
   w.writeU8(overrides?.colorDepth ?? 24)
   w.writeU8(overrides?.pixelDepth ?? 24)
   w.writeU16(Math.round((overrides?.devicePixelRatio ?? 2) * 100))
+
+  // collectedAt as two u32s
+  const collectedAtVal = overrides?.timestamp ?? now
+  w.writeU32(Math.floor(collectedAtVal / 0x100000000))
+  w.writeU32(collectedAtVal >>> 0)
 
   // DetectionData
   w.writeU8(overrides?.isAutomated === true ? 1 : 0)

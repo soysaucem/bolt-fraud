@@ -180,6 +180,9 @@ function tryDecompress(data: Buffer): Buffer {
  *   u8     navigator.cookieEnabled         (0/1)
  *   u16    navigator.languages.length
  *   str[]  navigator.languages
+ *   str    navigator.platform
+ *   str    navigator.vendor
+ *   str    navigator.doNotTrack      (empty string encodes null)
  *   u16    screen.width
  *   u16    screen.height
  *   u16    screen.availWidth
@@ -187,6 +190,8 @@ function tryDecompress(data: Buffer): Buffer {
  *   u8     screen.colorDepth
  *   u8     screen.pixelDepth
  *   u16    screen.devicePixelRatio * 100   (u16, not f64)
+ *   u32    collectedAt high 32 bits
+ *   u32    collectedAt low  32 bits
  *   --- DetectionData ---
  *   u8     isAutomated (0/1)
  *   u16    signals.length
@@ -297,6 +302,11 @@ function deserializeBinary(bytes: Buffer): Token {
   const cookieEnabled = readU8() === 1
   const navLanguages = readStrArray()
 
+  const navPlatform = readStr()
+  const navVendor = readStr()
+  const doNotTrackRaw = readStr()
+  const doNotTrack: string | null = doNotTrackRaw === '' ? null : doNotTrackRaw
+
   const screenWidth = readU16()
   const screenHeight = readU16()
   const screenAvailWidth = readU16()
@@ -305,6 +315,10 @@ function deserializeBinary(bytes: Buffer): Token {
   const screenPixelDepth = readU8()       // u8
   const devicePixelRatioRaw = readU16()   // u16: DPR * 100
   const devicePixelRatio = devicePixelRatioRaw / 100
+
+  const collectedAtHigh = readU32()
+  const collectedAtLow = readU32()
+  const collectedAt = collectedAtHigh * 0x1_0000_0000 + collectedAtLow
 
   const fingerprint: Fingerprint = {
     canvas: { hash: canvasHash },
@@ -321,14 +335,13 @@ function deserializeBinary(bytes: Buffer): Token {
       userAgent: navUserAgent,
       language: navLanguage,
       languages: navLanguages,
-      // platform, doNotTrack, vendor not in binary — set defaults
-      platform: '',
+      platform: navPlatform,
       hardwareConcurrency,
       deviceMemory,
       maxTouchPoints,
       cookieEnabled,
-      doNotTrack: null,
-      vendor: '',
+      doNotTrack,
+      vendor: navVendor,
       pluginCount,
     },
     screen: {
@@ -340,8 +353,7 @@ function deserializeBinary(bytes: Buffer): Token {
       pixelDepth: screenPixelDepth,
       devicePixelRatio,
     },
-    // collectedAt not in binary — use token timestamp as default
-    collectedAt: timestamp,
+    collectedAt,
   }
 
   // DetectionData — no detail flag in binary
