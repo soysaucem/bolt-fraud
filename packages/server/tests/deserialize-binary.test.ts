@@ -185,11 +185,13 @@ function buildBinaryToken(overrides?: {
   // scroll events: none
   w.writeU16(0)
 
-  // totals + snapshotAt
+  // totals + snapshotAt (snapshotAt written as two u32s: high then low, matching u64 format)
   w.writeU32(overrides?.totalMouseEvents ?? 1)
   w.writeU32(overrides?.totalKeyboardEvents ?? 1)
   w.writeU32(overrides?.totalScrollEvents ?? 0)
-  w.writeU32(overrides?.snapshotAt ?? 5000)
+  const snapshotAtVal = overrides?.snapshotAt ?? 5000
+  w.writeU32(Math.floor(snapshotAtVal / 0x100000000))
+  w.writeU32(snapshotAtVal >>> 0)
 
   return w.finish()
 }

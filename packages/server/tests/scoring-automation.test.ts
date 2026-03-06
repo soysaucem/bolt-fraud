@@ -56,7 +56,7 @@ describe('scoreAutomation', () => {
       expect(result.reasons).toContain(`instant_block:${signalName}`)
     })
 
-    it('does not trigger instant block for user_agent_headless (not in instant-block set)', () => {
+    it('does not trigger instant block for user_agent_headless (not in instant-block set, is a scored signal)', () => {
       const detection = createMockDetection({
         isAutomated: true,
         signals: [createAutomationSignal('user_agent_headless', true)],
@@ -65,10 +65,12 @@ describe('scoreAutomation', () => {
       const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
-      expect(result.reasons).toHaveLength(0)
+      // user_agent_headless is a SCORED_SIGNAL — adds score but not instant block
+      expect(result.score).toBe(20)
+      expect(result.reasons).toContain('user_agent_headless')
     })
 
-    it('does not trigger instant block for stack_trace_headless (not in instant-block set)', () => {
+    it('does not trigger instant block for stack_trace_headless (not in instant-block set, is a scored signal)', () => {
       const detection = createMockDetection({
         isAutomated: true,
         signals: [createAutomationSignal('stack_trace_headless', true)],
@@ -77,6 +79,9 @@ describe('scoreAutomation', () => {
       const result = scoreAutomation(detection)
 
       expect(result.instantBlock).toBe(false)
+      // stack_trace_headless is a SCORED_SIGNAL — adds score but not instant block
+      expect(result.score).toBe(15)
+      expect(result.reasons).toContain('stack_trace_headless')
     })
 
     it('does not trigger instant block for signals that are detected=false', () => {
@@ -238,6 +243,82 @@ describe('scoreAutomation', () => {
       expect(result.instantBlock).toBe(false)
       expect(result.score).toBe(10)
       expect(result.reasons).toContain('connection_rtt_zero')
+    })
+
+    it('adds +15 score for stack_trace_headless signal when isAutomated=true', () => {
+      // Arrange: stack_trace_headless is a SCORED_SIGNAL with contribution 15
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [createAutomationSignal('stack_trace_headless', true)],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert: scored signal — no instant block, +15 score, reason pushed
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(15)
+      expect(result.reasons).toContain('stack_trace_headless')
+    })
+
+    it('adds +20 score for user_agent_headless signal when isAutomated=true', () => {
+      // Arrange: user_agent_headless is a SCORED_SIGNAL with contribution 20
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [createAutomationSignal('user_agent_headless', true)],
+      })
+
+      // Act
+      const result = scoreAutomation(detection)
+
+      // Assert: scored signal — no instant block, +20 score, reason pushed
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(20)
+      expect(result.reasons).toContain('user_agent_headless')
+    })
+
+    it('does not score stack_trace_headless when detected=false', () => {
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [createAutomationSignal('stack_trace_headless', false)],
+      })
+
+      const result = scoreAutomation(detection)
+
+      expect(result.score).toBe(0)
+      expect(result.reasons).not.toContain('stack_trace_headless')
+    })
+
+    it('does not score user_agent_headless when isAutomated=false', () => {
+      const detection = createMockDetection({
+        isAutomated: false,
+        signals: [createAutomationSignal('user_agent_headless', true)],
+      })
+
+      const result = scoreAutomation(detection)
+
+      expect(result.score).toBe(0)
+      expect(result.reasons).not.toContain('user_agent_headless')
+    })
+
+    it('adds +45 total when stack_trace_headless, user_agent_headless, and languages_empty all detected', () => {
+      // Arrange: 15 + 20 + 10 = 45
+      const detection = createMockDetection({
+        isAutomated: true,
+        signals: [
+          createAutomationSignal('stack_trace_headless', true),
+          createAutomationSignal('user_agent_headless', true),
+          createAutomationSignal('languages_empty', true),
+        ],
+      })
+
+      const result = scoreAutomation(detection)
+
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(45)
+      expect(result.reasons).toContain('stack_trace_headless')
+      expect(result.reasons).toContain('user_agent_headless')
+      expect(result.reasons).toContain('languages_empty')
     })
 
     it('adds +20 total when both languages_empty and connection_rtt_zero are detected', () => {

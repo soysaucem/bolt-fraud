@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { RiskEngine } from '../src/scoring/engine.js'
 import { createMockToken, createMockFingerprint, createMockDetection, createMockBehavior } from './helpers.js'
 import type { FingerprintStore } from '../src/model/types.js'
@@ -280,9 +280,41 @@ describe('RiskEngine', () => {
       // Act
       const decision = await engine.score(token, '1.2.3.4')
 
-      // Assert: +5 for high IP count
+      // Assert: +5 for high IP count — reason is now the fixed string fingerprint_ip_abuse
       expect(decision.score).toBe(5)
-      expect(decision.reasons.some((r) => r.includes('fingerprint_seen_from_101_ips'))).toBe(true)
+      expect(decision.reasons).toContain('fingerprint_ip_abuse')
+    })
+
+    it('uses custom ipCountThreshold when provided', async () => {
+      // Arrange: lower threshold of 10 so IP count of 15 triggers the score
+      const mockStore: FingerprintStore = {
+        saveFingerprint: vi.fn().mockResolvedValue(undefined),
+        getIPCount: vi.fn().mockResolvedValue(15),
+      }
+      const engine = new RiskEngine({ store: mockStore, ipCountThreshold: 10 })
+      const token = createMockToken()
+
+      // Act
+      const decision = await engine.score(token, '1.2.3.4')
+
+      // Assert: IP count 15 > threshold 10 → +5 added
+      expect(decision.score).toBe(5)
+      expect(decision.reasons).toContain('fingerprint_ip_abuse')
+    })
+
+    it('does not add IP score when IP count is at (not above) the default threshold', async () => {
+      // Arrange: exactly at threshold (100) — check is > not >=
+      const mockStore: FingerprintStore = {
+        saveFingerprint: vi.fn().mockResolvedValue(undefined),
+        getIPCount: vi.fn().mockResolvedValue(100),
+      }
+      const engine = new RiskEngine({ store: mockStore })
+      const token = createMockToken()
+
+      const decision = await engine.score(token, '1.2.3.4')
+
+      expect(decision.score).toBe(0)
+      expect(decision.reasons).not.toContain('fingerprint_ip_abuse')
     })
 
     it('does not add IP score when clientIP is not provided', async () => {
@@ -366,6 +398,93 @@ describe('RiskEngine', () => {
 
       // Assert: no instant block from future timestamp check
       expect(decision.reasons).not.toContain('token_timestamp_future')
+    })
+  })
+
+  describe('hard token expiry at 300 seconds', () => {
+    it('instant blocks with token_expired when token is older than 300 seconds', async () => {
+      // Arrange: timestamp 301 seconds in the past
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() - 301_000 })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert: hard expiry triggers instant block
+      expect(decision.decision).toBe('block')
+      expect(decision.instantBlock).toBe(true)
+      expect(decision.score).toBe(100)
+      expect(decision.reasons).toContain('token_expired')
+    })
+
+    it('does NOT instant block when token is exactly 300 seconds old (boundary: must be > 300s)', async () => {
+      // Arrange: exactly at the hard expiry boundary
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() - 300_000 })
+
+      // Act
+      const decision = await engine.score(token)
+
+      // Assert: 300_000ms is NOT > 300_000, so no hard expiry
+      expect(decision.reasons).not.toContain('token_expired')
+    })
+  })
+
+  describe('nonce replay protection', () => {
+    it('instant blocks on the second call with the same nonce (replay detected)', async () => {
+      // Arrange: store with nonce tracking
+      const { MemoryStore } = await import('../src/store/memory.js')
+      const store = new MemoryStore()
+      const engine = new RiskEngine({ store })
+      const nonce = 'unique-nonce-abc123'
+      const token = createMockToken({ nonce })
+
+      // Act: first call succeeds
+      const firstDecision = await engine.score(token, '1.2.3.4')
+      expect(firstDecision.decision).not.toBe('block') // or at least not nonce-blocked
+
+      // Act: second call with identical nonce → instant block
+      const secondDecision = await engine.score(token, '1.2.3.4')
+
+      // Assert: nonce replay triggers instant block
+      expect(secondDecision.decision).toBe('block')
+      expect(secondDecision.instantBlock).toBe(true)
+      expect(secondDecision.reasons).toContain('token_nonce_replayed')
+    })
+
+    it('does not instant block when different nonces are used', async () => {
+      // Arrange
+      const { MemoryStore } = await import('../src/store/memory.js')
+      const store = new MemoryStore()
+      const engine = new RiskEngine({ store })
+
+      const token1 = createMockToken({ nonce: 'nonce-aaa' })
+      const token2 = createMockToken({ nonce: 'nonce-bbb' })
+
+      // Act
+      await engine.score(token1, '1.2.3.4')
+      const decision2 = await engine.score(token2, '1.2.3.4')
+
+      // Assert: different nonces are allowed
+      expect(decision2.reasons).not.toContain('token_nonce_replayed')
+    })
+
+    it('does not perform nonce replay check when store has no hasSeenNonce method', async () => {
+      // Arrange: plain store without nonce tracking
+      const mockStore: FingerprintStore = {
+        saveFingerprint: vi.fn().mockResolvedValue(undefined),
+        getIPCount: vi.fn().mockResolvedValue(0),
+        // hasSeenNonce and saveNonce are NOT provided
+      }
+      const engine = new RiskEngine({ store: mockStore })
+      const token = createMockToken({ nonce: 'my-nonce' })
+
+      // Act: calling twice should not crash even without nonce support
+      await engine.score(token, '1.2.3.4')
+      const decision = await engine.score(token, '1.2.3.4')
+
+      // Assert: no nonce-related instant block (store doesn't support it)
+      expect(decision.reasons).not.toContain('token_nonce_replayed')
     })
   })
 

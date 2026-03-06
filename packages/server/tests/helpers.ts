@@ -34,7 +34,10 @@ export function createMockFingerprint(overrides?: Partial<Fingerprint>): Fingerp
     screen: {
       width: 1920,
       height: 1080,
+      availWidth: 1920,
+      availHeight: 1040,
       colorDepth: 24,
+      pixelDepth: 24,
       devicePixelRatio: 2,
     },
     collectedAt: 1700000000000,
@@ -57,11 +60,11 @@ export function createMockDetection(overrides?: Partial<DetectionData>): Detecti
 export function createMockBehavior(overrides?: Partial<BehaviorData>): BehaviorData {
   return {
     mouse: [
-      { type: 'move', x: 100, y: 200, t: 1000 },
-      { type: 'move', x: 150, y: 220, t: 1016 },
-      { type: 'move', x: 120, y: 280, t: 1032 },
-      { type: 'move', x: 180, y: 240, t: 1048 },
-      { type: 'click', x: 200, y: 300, t: 1064 },
+      { type: 'move', x: 100, y: 200, t: 1000, buttons: 0 },
+      { type: 'move', x: 150, y: 220, t: 1016, buttons: 0 },
+      { type: 'move', x: 120, y: 280, t: 1032, buttons: 0 },
+      { type: 'move', x: 180, y: 240, t: 1048, buttons: 0 },
+      { type: 'click', x: 200, y: 300, t: 1064, buttons: 1 },
     ],
     keyboard: [
       { type: 'keydown', code: 'KeyA', t: 2000 },

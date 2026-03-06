@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createBoltFraud, generateKeyPair, decryptTokenDev, base64urlDecode, MemoryStore } from '../src/index.js'
+import { createBoltFraud, generateKeyPairSync, decryptTokenDev, base64urlDecode, MemoryStore } from '../src/index.js'
 import { createMockToken } from './helpers.js'
 
 /**
@@ -41,7 +41,7 @@ describe('Integration: decryptTokenDev + scoring pipeline', () => {
 
 describe('Integration: createBoltFraud verify pipeline', () => {
   it('generates a key pair without errors', () => {
-    const keys = generateKeyPair()
+    const keys = generateKeyPairSync()
 
     expect(keys.publicKey).toContain('BEGIN PUBLIC KEY')
     expect(keys.privateKey).toContain('BEGIN PRIVATE KEY')
@@ -55,7 +55,7 @@ describe('Integration: createBoltFraud verify pipeline', () => {
   })
 
   it('verify returns block decision for an invalid/garbled token', async () => {
-    const keys = generateKeyPair()
+    const keys = generateKeyPairSync()
     const bf = createBoltFraud({
       privateKeyPem: keys.privateKey,
       publicKeyPem: keys.publicKey,
@@ -99,7 +99,7 @@ describe('Integration: base64urlDecode', () => {
 describe('createBoltFraud partial key validation', () => {
   it('throws when only privateKeyPem is provided without publicKeyPem', () => {
     // Arrange: only one of the key pair
-    const { privateKey } = generateKeyPair()
+    const { privateKey } = generateKeyPairSync()
 
     // Act + Assert: both keys must be provided together
     expect(() =>
@@ -109,7 +109,7 @@ describe('createBoltFraud partial key validation', () => {
 
   it('throws when only publicKeyPem is provided without privateKeyPem', () => {
     // Arrange
-    const { publicKey } = generateKeyPair()
+    const { publicKey } = generateKeyPairSync()
 
     // Act + Assert
     expect(() =>
@@ -119,7 +119,7 @@ describe('createBoltFraud partial key validation', () => {
 
   it('does NOT throw when both privateKeyPem and publicKeyPem are provided', () => {
     // Arrange
-    const { publicKey, privateKey } = generateKeyPair()
+    const { publicKey, privateKey } = generateKeyPairSync()
 
     // Act + Assert
     expect(() =>
