@@ -17,12 +17,12 @@ graph LR
   TK -->|x-client-data header| API[Your API]
 
   subgraph Server
-    API --> Guard["@bolt-fraud/adapter-nestjs"]
-    Guard --> Core["@bolt-fraud/server"]
+    API --> Adapters["@bolt-fraud/adapter-nestjs<br/>@bolt-fraud/adapter-express"]
+    Adapters --> Core["@bolt-fraud/server"]
     Core -->|decrypt| Dec[Token Decryption]
     Core -->|score| SE[Scoring Engine]
     SE --> Decision{allow / challenge / block}
-    Core -->|store| Store[(FingerprintStore)]
+    Core -->|store| Store["FingerprintStore<br/>(Memory or Redis)"]
   end
 ```
 
@@ -31,22 +31,31 @@ graph LR
 | Package | Description |
 |---------|-------------|
 | `@bolt-fraud/client` | Browser SDK — fingerprinting, automation detection, behavioral telemetry, encryption |
-| `@bolt-fraud/server` | Server core — decryption, risk scoring engine, fingerprint store |
+| `@bolt-fraud/server` | Server core — decryption, risk scoring engine, fingerprint store interface |
 | `@bolt-fraud/adapter-nestjs` | NestJS integration — module, guard, decorators |
+| `@bolt-fraud/adapter-express` | Express middleware adapter for standalone Node.js apps |
 
 ## Quick Start
 
 ### 1. Install
 
+**Client SDK (browser)**:
 ```bash
-# Client SDK (browser)
 npm install @bolt-fraud/client
+```
 
-# Server (Node.js)
+**Server core**:
+```bash
 npm install @bolt-fraud/server
+```
 
-# NestJS adapter
+**Choose your adapter**:
+```bash
+# NestJS
 npm install @bolt-fraud/adapter-nestjs
+
+# Or Express
+npm install @bolt-fraud/adapter-express
 ```
 
 ### 2. Generate RSA Keys
@@ -163,6 +172,83 @@ export class ApiController {
   }
 }
 ```
+
+### 6. Express Integration
+
+For Express apps (or any Express-compatible framework):
+
+```typescript
+import express from 'express'
+import { boltFraudMiddleware } from '@bolt-fraud/adapter-express'
+import fs from 'node:fs'
+
+const app = express()
+
+app.use(
+  boltFraudMiddleware({
+    privateKeyPem: fs.readFileSync('keys/private.pem', 'utf-8'),
+    publicKeyPem: fs.readFileSync('keys/public.pem', 'utf-8'),
+    tokenHeader: 'x-client-data', // optional
+    blockThreshold: 70,            // optional
+    challengeThreshold: 30,        // optional
+    onBlock(req, res, decision) {
+      // Custom handler for blocked requests (default: 403)
+      res.status(403).json({ error: 'blocked', score: decision.score })
+    },
+    onChallenge(req, res, decision) {
+      // Custom handler for challenged requests (default: pass to next handler)
+      res.status(429).json({ error: 'captcha_required' })
+    },
+  })
+)
+
+app.get('/api/protected', (req, res) => {
+  // req.boltFraudDecision contains the Decision object
+  const { decision, score, reasons } = req.boltFraudDecision
+  console.log(`Decision: ${decision}, Score: ${score}`)
+  res.json({ status: 'ok' })
+})
+
+app.listen(3000)
+```
+
+The middleware:
+- Reads the token from the configured header (default: `x-client-data`)
+- Verifies and decrypts the token
+- Calls `onBlock` or `onChallenge` handlers if configured
+- Attaches the `Decision` to `req.boltFraudDecision` for downstream handlers
+- Calls `next()` for allowed or challenged requests
+
+## Fingerprint Store
+
+By default, the server uses an in-memory store. For production, use Redis with TTL-based cleanup:
+
+```typescript
+import { createBoltFraud } from '@bolt-fraud/server'
+import { RedisStore } from '@bolt-fraud/server'
+import fs from 'node:fs'
+
+// Option A: Pass a Redis URL (RedisStore owns the connection)
+const store = new RedisStore('redis://localhost:6379')
+
+// Option B: Pass your own ioredis instance (you own the connection)
+import Redis from 'ioredis'
+const redis = new Redis({ host: 'localhost', port: 6379 })
+const store = new RedisStore(redis, { fingerprintTtlMs: 86_400_000 })
+
+const bf = createBoltFraud({
+  privateKeyPem: fs.readFileSync('keys/private.pem', 'utf-8'),
+  publicKeyPem: fs.readFileSync('keys/public.pem', 'utf-8'),
+  store, // Optional, defaults to MemoryStore
+})
+
+// Clean up when shutting down (Option A only)
+await store.close()
+```
+
+Redis keys are namespaced with the `keyPrefix` (default: `bf:`):
+- `bf:fp:<fingerprintHash>` — Set of IP addresses
+- `bf:nonce:<nonce>` — Replay protection (EX TTL)
 
 ## Scoring Engine
 

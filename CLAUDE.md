@@ -2,7 +2,7 @@
 
 ## Overview
 
-Anti-bot detection system. TypeScript monorepo with 3 packages: client SDK (browser), server core (Node.js), NestJS adapter.
+Anti-bot detection system. TypeScript monorepo with 4 packages: client SDK (browser), server core (Node.js), NestJS adapter, Express adapter.
 
 ## Architecture
 
@@ -11,12 +11,16 @@ graph TD
   Client["@bolt-fraud/client (browser)"] -->|encrypted token| Server["@bolt-fraud/server (Node.js)"]
   Server --> Scoring[Risk Scoring Engine]
   Scoring --> Decision["allow / challenge / block"]
-  Adapter["@bolt-fraud/adapter-nestjs"] --> Server
+  NestAdapter["@bolt-fraud/adapter-nestjs"] --> Server
+  ExpressAdapter["@bolt-fraud/adapter-express"] --> Server
+  Server -->|store| Store["FingerprintStore<br/>(Memory or Redis)"]
 ```
 
 - Client collects fingerprints + behavior, encrypts with AES-256-GCM + RSA-OAEP, injects via fetch/XHR hooks
 - Server decrypts, runs weighted scoring engine, returns decision
 - NestJS adapter wraps server in a guard + decorators
+- Express adapter provides middleware with custom block/challenge handlers
+- FingerprintStore supports in-memory and Redis backends
 
 ## Key Files
 
@@ -38,9 +42,12 @@ graph TD
 | `packages/server/src/scoring/automation.ts` | AutomationScorer: instant-block signals (webdriver, framework globals), scored signals |
 | `packages/server/src/scoring/behavior.ts` | BehaviorScorer: interaction detection, mouse entropy, keystroke uniformity |
 | `packages/server/src/store/memory.ts` | MemoryStore: in-memory FingerprintStore (nonce + IP tracking, no TTL cleanup) |
+| `packages/server/src/store/redis.ts` | RedisStore: Redis-backed FingerprintStore with TTL-based cleanup |
 | `packages/adapter-nestjs/src/bolt-fraud.module.ts` | BoltFraudModule: forRoot/forRootAsync dynamic module |
 | `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | BoltFraudGuard: CanActivate — reads token header, calls verify, injects decision |
 | `packages/adapter-nestjs/src/bolt-fraud.decorator.ts` | @BoltFraudProtected(), @BoltFraudDecision() decorators |
+| `packages/adapter-express/src/middleware.ts` | boltFraudMiddleware: Express middleware factory with custom handlers |
+| `packages/adapter-express/src/index.ts` | Express adapter exports: middleware, BoltFraudExpressConfig, re-exported server types |
 
 ## Commands
 
@@ -49,6 +56,7 @@ make install          # npm install
 make test             # Run all tests (vitest)
 make test-client      # Client tests only
 make test-server      # Server tests only
+make test-adapters    # Adapter tests (NestJS + Express)
 make typecheck        # tsc --noEmit all workspaces
 make build            # tsup build all packages
 make clean            # rm dist/
@@ -60,8 +68,9 @@ make generate-keys    # Generate RSA key pair in keys/
 - Framework: **Vitest** in all packages
 - Client tests use `jsdom` environment (browser API mocking)
 - Server tests use Node.js environment
+- Adapter tests (NestJS + Express) use Node.js environment
 - Mock factories in `tests/helpers.ts` per package
-- 280+ tests across 3 packages, 80%+ coverage
+- 512+ tests across 4 packages, 80%+ coverage
 
 ### Known jsdom Limitations
 
@@ -73,8 +82,9 @@ make generate-keys    # Generate RSA key pair in keys/
 - **ESM** — `"type": "module"`, imports use `.js` extensions
 - **Immutable types** — all interfaces use `readonly`, never mutate
 - **Dual output** — tsup builds CJS + ESM
-- **Zero dependencies** — client and server packages have no runtime deps
-- **Package boundaries** — client depends on nothing; server depends on nothing; adapter-nestjs depends on server
+- **Zero dependencies** — client and server packages have no runtime deps; adapters depend on server
+- **Package boundaries** — client depends on nothing; server depends on nothing; both adapters depend on server
+- **Peer dependencies** — RedisStore has ioredis as peerDep (dynamic require for zero-dep default); Express adapter has express as peerDep
 - **Types** — server types are canonical (`model/types.ts`); client has own browser-specific types
 - **Scorer plugins** — implement `Scorer` interface with `name` property and `score()` method
 - **Scoring reasons** — use snake_case: `canvas_fingerprint_empty_or_zero`, `no_interaction_events`, `languages_empty`, `connection_rtt_zero`
@@ -106,3 +116,26 @@ Server:
 ```
 
 Bundle wire format: `[1B keyId][2B wrappedKeyLen BE][wrappedKey bytes][12B random IV][ciphertext + 16B GCM authTag]`
+
+## CI/CD
+
+### GitHub Actions Workflows
+
+**CI Pipeline** (`.github/workflows/ci.yml`):
+- Runs on every push to `main` and all PRs
+- Tests on Node.js 18 and 20
+- Typechecks client, server, adapters in parallel
+- Runs full test suite (client, server, adapters)
+- Builds all packages only on main push (PRs skip full build)
+- Cancels in-progress runs for the same branch
+
+**Release Workflow** (`.github/workflows/release.yml`):
+- Manual trigger: `gh workflow run release.yml -f bump=patch|minor|major`
+- Checks out repo with full history for version bumping
+- Typechecks all packages
+- Runs full test suite
+- Builds all packages
+- Bumps versions in all package.json files atomically
+- Runs `npm pack --dry-run` to verify publishable artifacts
+- Commits version bump and tags with `v<version>`
+- Pushes commit and tags to origin (npm publish not included — manual for now)

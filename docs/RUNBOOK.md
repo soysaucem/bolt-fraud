@@ -242,24 +242,132 @@ const engine = new RiskEngine({
 
 ### Memory Store Growing Unbounded
 
-The in-memory `MemoryStore` does not evict entries. For production, implement `FingerprintStore` with Redis and TTL:
+The in-memory `MemoryStore` does not evict entries. For production, use the built-in `RedisStore`:
 
 ```typescript
-import type { FingerprintStore } from '@bolt-fraud/server'
+import { createBoltFraud, RedisStore } from '@bolt-fraud/server'
+import fs from 'node:fs'
+
+// Option A: Redis URL (RedisStore owns connection)
+const store = new RedisStore('redis://localhost:6379', {
+  fingerprintTtlMs: 86_400_000,  // 24 hours
+  ipSetCap: 10_000,              // Max IPs per fingerprint
+  keyPrefix: 'bf:'               // Redis key namespace
+})
+
+// Option B: Existing ioredis instance (you own connection)
 import Redis from 'ioredis'
+const redis = new Redis(process.env.REDIS_URL)
+const store = new RedisStore(redis)
 
-class RedisStore implements FingerprintStore {
-  constructor(private redis: Redis) {}
+const bf = createBoltFraud({
+  privateKeyPem: fs.readFileSync('keys/private.pem', 'utf-8'),
+  publicKeyPem: fs.readFileSync('keys/public.pem', 'utf-8'),
+  store,
+})
 
-  async saveFingerprint(hash: string, ip: string): Promise<void> {
-    await this.redis.sadd(`fp:${hash}:ips`, ip)
-    await this.redis.expire(`fp:${hash}:ips`, 86400) // 24h TTL
-  }
+// Cleanup on shutdown (Option A only)
+process.on('SIGTERM', async () => {
+  await store.close()
+})
+```
 
-  async getIPCount(hash: string): Promise<number> {
-    return this.redis.scard(`fp:${hash}:ips`)
-  }
+## Redis Store Configuration
+
+### Connection Options
+
+```typescript
+import { RedisStore } from '@bolt-fraud/server'
+
+// Option A: Connection URL (RedisStore creates and owns the connection)
+const store = new RedisStore('redis://localhost:6379')
+// or with auth: 'redis://:password@host:port'
+
+// Option B: Existing client (you maintain the connection lifecycle)
+import Redis from 'ioredis'
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379'),
+  password: process.env.REDIS_PASSWORD,
+  db: parseInt(process.env.REDIS_DB || '0'),
+})
+const store = new RedisStore(redis)
+```
+
+### Configuration
+
+```typescript
+interface RedisStoreOptions {
+  // TTL for fingerprint Sets (sliding window). Default: 86_400_000ms (24h)
+  fingerprintTtlMs?: number
+
+  // Max distinct IPs tracked per fingerprint. Default: 10_000
+  // When reached, IPs are not added but TTL still refreshes
+  ipSetCap?: number
+
+  // Redis key namespace prefix. Default: 'bf:'
+  keyPrefix?: string
 }
+
+new RedisStore('redis://localhost:6379', {
+  fingerprintTtlMs: 3_600_000,    // 1 hour (shorter for high-volume)
+  ipSetCap: 5_000,               // Conservative cap
+  keyPrefix: 'fraud:',           // Custom prefix
+})
+```
+
+### Environment Variables
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379` | Full connection URL |
+| `REDIS_HOST` | `localhost` | Host (default: localhost) |
+| `REDIS_PORT` | `6379` | Port (default: 6379) |
+| `REDIS_PASSWORD` | `secret` | Auth password |
+| `REDIS_DB` | `0` | Database number |
+
+### Redis Health Checks
+
+Monitor Redis connectivity and performance:
+
+```typescript
+import { RedisStore } from '@bolt-fraud/server'
+
+const store = new RedisStore(process.env.REDIS_URL)
+
+app.get('/health/redis', async (req, res) => {
+  try {
+    // Quick ping to verify connection
+    const testKey = 'bf:health:check'
+    const testValue = Date.now().toString()
+    await store.saveNonce(testKey, 1000) // 1s TTL
+    const exists = await store.hasSeenNonce(testKey)
+
+    if (!exists) {
+      return res.status(503).json({ redis: 'down', error: 'health_check_failed' })
+    }
+
+    res.json({ redis: 'up' })
+  } catch (error) {
+    res.status(503).json({ redis: 'error', error: error.message })
+  }
+})
+```
+
+### Redis Key Layout
+
+RedisStore uses namespaced keys with configurable prefix (default: `bf:`):
+
+```
+bf:fp:<fingerprintHash>  — Redis Set of IP addresses with sliding TTL
+bf:nonce:<nonce>         — Redis String "1" with EX (expiry) for replay protection
+```
+
+Example with custom prefix:
+
+```
+fraud:fp:abc123def456    — Fingerprint IP set
+fraud:nonce:xyz789       — Nonce entry
 ```
 
 ## Health Checks
@@ -272,4 +380,126 @@ app.get('/health', (req, res) => {
 })
 ```
 
-Verify the scoring engine is functional by running a test token through `verify()` periodically.
+Verify the scoring engine is functional by running a test token through `verify()` periodically. If using Redis, also check Redis connectivity (see Redis Health Checks section above).
+
+## CI/CD Pipeline
+
+### Continuous Integration
+
+CI runs automatically on every push to `main` and all pull requests.
+
+**Workflow**: `.github/workflows/ci.yml`
+
+**Runs**:
+1. Typecheck client, server, NestJS adapter, Express adapter (parallel)
+2. Build server (required by adapters)
+3. Run test suite (client, server, NestJS adapter, Express adapter)
+4. Full build (main branch only)
+
+**Test matrices**: Node.js 18 and 20
+
+**Example**:
+```bash
+# View CI status
+gh run list --repo bolt-fraud
+
+# View specific run
+gh run view <run-id>
+
+# Re-run a failed workflow
+gh run rerun <run-id>
+```
+
+### Release Process
+
+Releases are triggered manually via the release workflow.
+
+**Workflow**: `.github/workflows/release.yml`
+
+**Steps**:
+1. Dispatch the workflow with a version bump type
+2. Workflow runs full test suite and builds all packages
+3. Bumps version in all `package.json` files
+4. Verifies packages are publishable with `npm pack --dry-run`
+5. Commits version bump and tags with `v<version>`
+6. Pushes commit and tags to origin
+
+**Trigger a release**:
+
+```bash
+# Patch release (v0.1.0 -> v0.1.1)
+gh workflow run release.yml --repo bolt-fraud -f bump=patch
+
+# Minor release (v0.1.0 -> v0.2.0)
+gh workflow run release.yml --repo bolt-fraud -f bump=minor
+
+# Major release (v0.1.0 -> v1.0.0)
+gh workflow run release.yml --repo bolt-fraud -f bump=major
+```
+
+**Monitor release**:
+```bash
+# View workflow run
+gh run list --workflow release.yml --repo bolt-fraud
+
+# View specific run
+gh run view <run-id> --repo bolt-fraud
+
+# Check tags created
+git tag -l | tail -5
+```
+
+**Post-release**:
+After the release workflow completes:
+1. Verify tags on GitHub: `https://github.com/<owner>/bolt-fraud/releases`
+2. Manually publish packages to npm (npm publish is not automated)
+3. Update CHANGELOG.md with release notes
+4. Announce release to relevant channels
+
+### Versioning Strategy
+
+- All packages share the same version number (monorepo)
+- Use semantic versioning: MAJOR.MINOR.PATCH
+- Tag format: `v<version>` (e.g., `v0.2.0`)
+- Each release bumps all packages atomically
+
+### Debugging CI/CD Failures
+
+**Typecheck fails**:
+```bash
+# Run locally to reproduce
+npx tsc --noEmit -p packages/client/tsconfig.json
+npx tsc --noEmit -p packages/server/tsconfig.json
+npx tsc --noEmit -p packages/adapter-nestjs/tsconfig.json
+npx tsc --noEmit -p packages/adapter-express/tsconfig.json
+```
+
+**Tests fail**:
+```bash
+# Run locally
+npm test  # All packages
+npm test -w packages/client
+npm test -w packages/server
+npm test -w packages/adapter-nestjs
+npm test -w packages/adapter-express
+```
+
+**Build fails**:
+```bash
+# Full build
+npm run build
+
+# Per-package
+npx tsup -C
+cd packages/client && npm run build
+```
+
+**Release versioning issues**:
+```bash
+# Check current versions
+npm version --workspaces --include-workspace-root
+
+# Revert accidental version bump (before push)
+git reset --soft HEAD~1  # Undo commit
+git restore package*.json
+```
