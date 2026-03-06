@@ -1,6 +1,7 @@
 export {
   BoltFraudModule,
   BOLT_FRAUD_INSTANCE,
+  BOLT_FRAUD_OPTIONS,
   BOLT_FRAUD_TOKEN_HEADER,
   type BoltFraudModuleConfig,
 } from './bolt-fraud.module.js'

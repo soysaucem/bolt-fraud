@@ -6,7 +6,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common'
-import type { BoltFraud } from '@bolt-fraud/server'
+import type { BoltFraud, Decision } from '@bolt-fraud/server'
 import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER } from './bolt-fraud.module.js'
 
 const MAX_TOKEN_LENGTH = 65_536 // 64KB base64 encoded
@@ -38,8 +38,17 @@ export class BoltFraudGuard implements CanActivate {
       )
     }
 
-    const clientIP = request.ip ?? request.connection?.remoteAddress
-    const decision = await this.boltFraud.verify(token, clientIP)
+    const clientIP = request.ip ?? request.socket?.remoteAddress
+
+    let decision: Decision
+    try {
+      decision = await this.boltFraud.verify(token, clientIP)
+    } catch {
+      throw new HttpException(
+        { decision: 'block', reason: 'verification_error' },
+        HttpStatus.FORBIDDEN,
+      )
+    }
 
     if (decision.decision === 'block') {
       throw new HttpException(

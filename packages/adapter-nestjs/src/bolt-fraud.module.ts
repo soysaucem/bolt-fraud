@@ -33,30 +33,30 @@ export class BoltFraudModule {
 
   static forRootAsync(options: {
     useFactory: (...args: unknown[]) => BoltFraudModuleConfig | Promise<BoltFraudModuleConfig>
-    inject?: readonly (string | symbol | Function)[]
+    inject?: readonly (string | symbol | (abstract new (...args: unknown[]) => unknown))[]
   }): DynamicModule {
+    const configProvider: Provider = {
+      provide: BOLT_FRAUD_OPTIONS,
+      useFactory: options.useFactory,
+      inject: options.inject ? [...options.inject] : [],
+    }
+
     const boltFraudProvider: Provider = {
       provide: BOLT_FRAUD_INSTANCE,
-      useFactory: async (...args: unknown[]) => {
-        const config = await options.useFactory(...args)
-        return createBoltFraud(config)
-      },
-      inject: options.inject ? [...options.inject] : [],
+      useFactory: (config: BoltFraudModuleConfig) => createBoltFraud(config),
+      inject: [BOLT_FRAUD_OPTIONS],
     }
 
     const tokenHeaderProvider: Provider = {
       provide: BOLT_FRAUD_TOKEN_HEADER,
-      useFactory: async (...args: unknown[]) => {
-        const config = await options.useFactory(...args)
-        return config.tokenHeader ?? 'x-client-data'
-      },
-      inject: options.inject ? [...options.inject] : [],
+      useFactory: (config: BoltFraudModuleConfig) => config.tokenHeader ?? 'x-client-data',
+      inject: [BOLT_FRAUD_OPTIONS],
     }
 
     return {
       module: BoltFraudModule,
       global: true,
-      providers: [boltFraudProvider, tokenHeaderProvider, BoltFraudGuard],
+      providers: [configProvider, boltFraudProvider, tokenHeaderProvider, BoltFraudGuard],
       exports: [BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BoltFraudGuard],
     }
   }
