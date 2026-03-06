@@ -3,7 +3,7 @@
  * Improvement over Shopee: random IV per token, authenticated encryption.
  *
  * Bundle wire format:
- *   [2 bytes: wrappedKey length BE] [wrappedKey bytes] [12 bytes: IV] [ciphertext bytes]
+ *   [1 byte: keyId] [2 bytes: wrappedKey length BE] [wrappedKey bytes] [12 bytes: IV] [ciphertext bytes]
  */
 
 const IV_LENGTH = 12
@@ -11,6 +11,7 @@ const IV_LENGTH = 12
 export async function encrypt(
   plaintext: Uint8Array,
   publicKeyPem: string | undefined,
+  keyId: number = 0,
 ): Promise<string> {
   // Dev mode — no public key provided, return plaintext as base64url
   if (!publicKeyPem) {
@@ -31,16 +32,17 @@ export async function encrypt(
     name: 'RSA-OAEP',
   })
 
-  // Build bundle: [u16 wrappedKey length] [wrappedKey] [12-byte IV] [ciphertext]
+  // Build bundle: [u8 keyId] [u16 wrappedKey length] [wrappedKey] [12-byte IV] [ciphertext]
   const wrappedKeyBytes = new Uint8Array(wrappedKey)
   const ciphertextBytes = new Uint8Array(ciphertext)
 
-  const bundle = new Uint8Array(2 + wrappedKeyBytes.length + IV_LENGTH + ciphertextBytes.length)
+  const bundle = new Uint8Array(1 + 2 + wrappedKeyBytes.length + IV_LENGTH + ciphertextBytes.length)
+  bundle[0] = keyId
   const view = new DataView(bundle.buffer)
-  view.setUint16(0, wrappedKeyBytes.length, false)
-  bundle.set(wrappedKeyBytes, 2)
-  bundle.set(iv, 2 + wrappedKeyBytes.length)
-  bundle.set(ciphertextBytes, 2 + wrappedKeyBytes.length + IV_LENGTH)
+  view.setUint16(1, wrappedKeyBytes.length, false)
+  bundle.set(wrappedKeyBytes, 3)
+  bundle.set(iv, 3 + wrappedKeyBytes.length)
+  bundle.set(ciphertextBytes, 3 + wrappedKeyBytes.length + IV_LENGTH)
 
   return base64urlEncode(bundle)
 }
@@ -48,15 +50,16 @@ export async function encrypt(
 export async function decrypt(
   bundle: string,
   privateKeyPem: string,
-): Promise<Uint8Array> {
+): Promise<{ plaintext: Uint8Array; keyId: number }> {
   const bundleBytes = base64urlDecode(bundle)
   const view = new DataView(bundleBytes.buffer, bundleBytes.byteOffset, bundleBytes.byteLength)
 
-  // Parse bundle: [u16 wrappedKey length] [wrappedKey] [12-byte IV] [ciphertext]
-  const wrappedKeyLen = view.getUint16(0, false)
-  const wrappedKey = bundleBytes.slice(2, 2 + wrappedKeyLen)
-  const iv = bundleBytes.slice(2 + wrappedKeyLen, 2 + wrappedKeyLen + IV_LENGTH)
-  const ciphertext = bundleBytes.slice(2 + wrappedKeyLen + IV_LENGTH)
+  // Parse bundle: [u8 keyId] [u16 wrappedKey length] [wrappedKey] [12-byte IV] [ciphertext]
+  const keyId = bundleBytes[0] ?? 0
+  const wrappedKeyLen = view.getUint16(1, false)
+  const wrappedKey = bundleBytes.slice(3, 3 + wrappedKeyLen)
+  const iv = bundleBytes.slice(3 + wrappedKeyLen, 3 + wrappedKeyLen + IV_LENGTH)
+  const ciphertext = bundleBytes.slice(3 + wrappedKeyLen + IV_LENGTH)
 
   const rsaKey = await importPrivateKey(privateKeyPem)
 
@@ -76,7 +79,7 @@ export async function decrypt(
     ciphertext,
   )
 
-  return new Uint8Array(plaintext)
+  return { plaintext: new Uint8Array(plaintext), keyId }
 }
 
 export async function importPublicKey(keyPemOrBase64: string): Promise<CryptoKey> {

@@ -146,6 +146,7 @@ export interface EncryptedToken {
 export interface BoltFraudConfig {
   readonly serverUrl: string
   readonly publicKey?: string
+  readonly keyId?: number
   readonly hookFetch?: boolean
   readonly hookXHR?: boolean
   readonly collectInterval?: number

@@ -27,13 +27,16 @@ import { MemoryStore } from './store/memory.js'
 export type {
   BoltFraudServerConfig,
   Decision,
+  ClientSafeDecision,
   DecisionType,
   Token,
   Fingerprint,
   FingerprintStore,
 } from './model/types.js'
+export { toClientSafeDecision } from './model/types.js'
 
-export { RiskEngine, computeFingerprintHash } from './scoring/engine.js'
+export { RiskEngine, computeFingerprintHash, AutomationScorer, FingerprintScorer, BehaviorScorer, TokenAgeScorer, IPReputationScorer } from './scoring/engine.js'
+export type { Scorer, ScorerResult, ScoringContext } from './scoring/engine.js'
 export { KeyManager, generateKeyPairSync, generateKeyPairAsync } from './crypto/keys.js'
 export { MemoryStore } from './store/memory.js'
 export { decryptToken, decryptTokenDev, base64urlDecode } from './crypto/decrypt.js'
@@ -60,6 +63,12 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
     keyManager.loadFromStrings(config.publicKeyPem, config.privateKeyPem)
   }
 
+  if (config.additionalKeys) {
+    for (const key of config.additionalKeys) {
+      keyManager.addKeyPair(key.keyId, key.publicKeyPem, key.privateKeyPem)
+    }
+  }
+
   const store = config.store ?? new MemoryStore()
   const engine = new RiskEngine({
     blockThreshold: config.blockThreshold,
@@ -71,7 +80,7 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
     async verify(encryptedToken: string, clientIP?: string): Promise<Decision> {
       let token: Token
       try {
-        token = decryptToken(encryptedToken, keyManager.privateKeyObject)
+        token = decryptToken(encryptedToken, (keyId) => keyManager.getPrivateKeyObject(keyId))
       } catch (error) {
         return {
           decision: 'block',
@@ -92,7 +101,7 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
     },
 
     getPublicKey(): string {
-      return keyManager.publicKey
+      return keyManager.getPublicKey()
     },
   }
 }

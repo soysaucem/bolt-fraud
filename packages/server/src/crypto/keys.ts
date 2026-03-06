@@ -6,9 +6,9 @@ export interface KeyPair {
   readonly privateKey: string
 }
 
-export function generateKeyPairSync(): KeyPair {
+export function generateKeyPairSync(modulusLength: number = 2048): KeyPair {
   const { publicKey, privateKey } = _generateKeyPairSync('rsa', {
-    modulusLength: 2048,
+    modulusLength,
     publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
   })
@@ -19,12 +19,12 @@ export function generateKeyPairSync(): KeyPair {
  * Async variant of generateKeyPairSync. Avoids blocking the event loop
  * during key generation (RSA-2048 can take ~100ms synchronously).
  */
-export function generateKeyPairAsync(): Promise<KeyPair> {
+export function generateKeyPairAsync(modulusLength: number = 2048): Promise<KeyPair> {
   return new Promise((resolve, reject) => {
     _generateKeyPair(
       'rsa',
       {
-        modulusLength: 2048,
+        modulusLength,
         publicKeyEncoding: { type: 'spki', format: 'pem' },
         privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
       },
@@ -56,34 +56,58 @@ export function loadKeyFromEnv(envVar: string): string {
 }
 
 export class KeyManager {
-  private _publicKey: string | null = null
-  private _privateKey: string | null = null
-  private _privateKeyObject: KeyObject | null = null
+  private readonly _keys = new Map<number, { publicKey: string; privateKey: string; privateKeyObject: KeyObject }>()
+  private _defaultKeyId = 0
+
+  addKeyPair(keyId: number, publicKey: string, privateKey: string): void {
+    this._keys.set(keyId, {
+      publicKey,
+      privateKey,
+      privateKeyObject: createPrivateKey(privateKey),
+    })
+  }
+
+  setDefaultKeyId(keyId: number): void {
+    if (!this._keys.has(keyId)) throw new Error(`Key ID ${keyId} not loaded`)
+    this._defaultKeyId = keyId
+  }
+
+  getPrivateKeyObject(keyId?: number): KeyObject {
+    const id = keyId ?? this._defaultKeyId
+    const entry = this._keys.get(id)
+    if (!entry) throw new Error(`Key ID ${id} not loaded`)
+    return entry.privateKeyObject
+  }
+
+  getPublicKey(keyId?: number): string {
+    const id = keyId ?? this._defaultKeyId
+    const entry = this._keys.get(id)
+    if (!entry) throw new Error(`Key ID ${id} not loaded`)
+    return entry.publicKey
+  }
 
   loadFromFiles(publicKeyPath: string, privateKeyPath: string): void {
-    this._publicKey = loadKeyFromFile(publicKeyPath)
-    this._privateKey = loadKeyFromFile(privateKeyPath)
-    this._privateKeyObject = createPrivateKey(this._privateKey)
+    const publicKey = loadKeyFromFile(publicKeyPath)
+    const privateKey = loadKeyFromFile(privateKeyPath)
+    this.addKeyPair(0, publicKey, privateKey)
   }
 
   loadFromStrings(publicKey: string, privateKey: string): void {
-    this._publicKey = publicKey
-    this._privateKey = privateKey
-    this._privateKeyObject = createPrivateKey(privateKey)
+    this.addKeyPair(0, publicKey, privateKey)
   }
 
   get publicKey(): string {
-    if (!this._publicKey) throw new Error('Public key not loaded')
-    return this._publicKey
+    return this.getPublicKey()
   }
 
   get privateKey(): string {
-    if (!this._privateKey) throw new Error('Private key not loaded')
-    return this._privateKey
+    const id = this._defaultKeyId
+    const entry = this._keys.get(id)
+    if (!entry) throw new Error(`Key ID ${id} not loaded`)
+    return entry.privateKey
   }
 
   get privateKeyObject(): KeyObject {
-    if (!this._privateKeyObject) throw new Error('Private key not loaded')
-    return this._privateKeyObject
+    return this.getPrivateKeyObject()
   }
 }

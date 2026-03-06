@@ -20,11 +20,11 @@ const MAX_DECOMPRESSED_SIZE = 262_144 // 256 KB
 
 /**
  * Decrypt an encrypted token bundle from the client.
- * Bundle format: [wrappedKeyLen (u16 big-endian)] [wrappedKey] [iv (12 bytes)] [ciphertext + authTag (last 16 bytes)]
+ * Bundle format: [keyId (u8)] [wrappedKeyLen (u16 big-endian)] [wrappedKey] [iv (12 bytes)] [ciphertext + authTag (last 16 bytes)]
  */
 export function decryptToken(
   bundle: string,
-  privateKey: KeyObject,
+  getPrivateKey: (keyId: number) => KeyObject,
 ): Token {
   // 1. base64url decode
   const raw = base64urlDecode(bundle)
@@ -34,12 +34,13 @@ export function decryptToken(
     throw new Error(`decryptToken: bundle exceeds max size (${raw.length} > ${MAX_TOKEN_SIZE})`)
   }
 
-  // 2. Parse bundle: [wrappedKeyLen u16] [wrappedKey] [iv 12 bytes] [ciphertext+authTag]
-  if (raw.length < 2) {
-    throw new Error('decryptToken: bundle too short to contain wrappedKeyLen')
+  // 2. Parse bundle: [keyId u8] [wrappedKeyLen u16] [wrappedKey] [iv 12 bytes] [ciphertext+authTag]
+  if (raw.length < 3) {
+    throw new Error('decryptToken: bundle too short to contain keyId and wrappedKeyLen')
   }
-  const wrappedKeyLen = raw.readUInt16BE(0)
-  const offset = 2
+  const keyId = raw.readUInt8(0)
+  const wrappedKeyLen = raw.readUInt16BE(1)
+  const offset = 3
   if (raw.length < offset + wrappedKeyLen + 12 + 16) {
     throw new Error('decryptToken: bundle too short')
   }
@@ -48,6 +49,7 @@ export function decryptToken(
   const ciphertextWithTag = raw.subarray(offset + wrappedKeyLen + 12)
 
   // 3. RSA-OAEP decrypt the wrappedKey → AES session key
+  const privateKey = getPrivateKey(keyId)
   const aesKeyBytes = privateDecrypt(
     {
       key: privateKey,

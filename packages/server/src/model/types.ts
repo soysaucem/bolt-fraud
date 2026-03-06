@@ -99,11 +99,22 @@ export interface BehaviorData {
 
 export type DecisionType = 'allow' | 'challenge' | 'block'
 
+/** Full decision with internal diagnostic data — never expose to clients */
 export interface Decision {
   readonly decision: DecisionType
   readonly score: number
   readonly instantBlock: boolean
   readonly reasons: readonly string[]
+}
+
+/** Safe to return to clients — no score, no reasons, no internal data */
+export interface ClientSafeDecision {
+  readonly decision: DecisionType
+}
+
+/** Helper to strip internal fields from a Decision */
+export function toClientSafeDecision(decision: Decision): ClientSafeDecision {
+  return { decision: decision.decision }
 }
 
 // ─── Configuration ──────────────────────────────────────────────────────────
@@ -114,6 +125,7 @@ export interface BoltFraudServerConfig {
   readonly blockThreshold?: number
   readonly challengeThreshold?: number
   readonly store?: FingerprintStore
+  readonly additionalKeys?: readonly { readonly keyId: number; readonly publicKeyPem: string; readonly privateKeyPem: string }[]
 }
 
 // ─── Store ──────────────────────────────────────────────────────────────────

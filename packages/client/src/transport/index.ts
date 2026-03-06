@@ -10,7 +10,7 @@ export async function buildToken(
 ): Promise<EncryptedToken> {
   const bytes = serialize(payload)
   const compressed = await tryCompress(bytes)
-  const token = await encrypt(compressed, config.publicKey)
+  const token = await encrypt(compressed, config.publicKey, config.keyId ?? 0)
   return { token, v: 1 }
 }
 
