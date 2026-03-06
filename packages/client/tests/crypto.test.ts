@@ -1,6 +1,13 @@
 // @vitest-environment node
+import { webcrypto } from 'node:crypto'
 import { describe, it, expect, beforeAll } from 'vitest'
 import { encrypt, decrypt, base64urlEncode, base64urlDecode } from '../src/transport/crypto.js'
+
+// Node 18 doesn't expose globalThis.crypto — polyfill for tests
+if (typeof globalThis.crypto === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(globalThis as any).crypto = webcrypto
+}
 
 // ─── base64url encoding ───────────────────────────────────────────────────────
 
