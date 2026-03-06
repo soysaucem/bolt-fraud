@@ -35,35 +35,118 @@ const keys = await generateKeyPairAsync()
 
 ## Key Rotation
 
+Key rotation allows seamless updates without downtime or client synchronization issues.
+
 ```mermaid
 sequenceDiagram
   participant Admin
   participant Server
   participant Client
 
-  Admin->>Server: Deploy new key pair
-  Note over Server: Accept both old and new keys (grace period)
-  Admin->>Client: Push new public key
-  Note over Client: New tokens use new key
-  Admin->>Server: Remove old private key after grace period
+  Admin->>Server: Deploy additionalKeys: [{ keyId: 1, ... }]
+  Note over Server: Both keyId=0 and keyId=1 accepted
+  Admin->>Client: Push new publicKey with keyId: 1
+  Note over Client: New tokens embed keyId=1
+
+  par Old tokens
+    Client->>Server: Token with keyId=0
+    Server->>Server: Decrypt using keyId=0
+  and New tokens
+    Client->>Server: Token with keyId=1
+    Server->>Server: Decrypt using keyId=1
+  end
+
+  Admin->>Server: Remove keyId=0 from additionalKeys
+  Note over Server: Only keyId=1 remains
 ```
 
-1. Generate a new key pair
-2. Deploy the new private key to the server alongside the old one
-3. Update the client SDK config with the new public key
-4. After sufficient rollover time (e.g., 24h), remove the old private key
+**Step-by-step procedure**:
+
+1. Generate a new RSA key pair:
+   ```bash
+   openssl genpkey -algorithm RSA -out keys/private-v2.pem -pkeyopt rsa_keygen_bits:2048
+   openssl rsa -pubout -in keys/private-v2.pem -out keys/public-v2.pem
+   ```
+
+2. Deploy server with both keys in `additionalKeys`:
+   ```typescript
+   const bf = createBoltFraud({
+     privateKeyPem: oldPrivateKey,  // keyId=0 (default)
+     publicKeyPem: oldPublicKey,
+     additionalKeys: [
+       { keyId: 1, publicKeyPem: newPublicKey, privateKeyPem: newPrivateKey }
+     ]
+   })
+   ```
+
+3. Update client SDK to use the new key:
+   ```typescript
+   await init({
+     serverUrl: 'https://api.example.com',
+     publicKey: newPublicKey,
+     keyId: 1  // Embed in token header
+   })
+   ```
+
+4. Monitor logs for successful decryption with both keys.
+
+5. After grace period (24-48 hours), remove the old key:
+   ```typescript
+   const bf = createBoltFraud({
+     privateKeyPem: newPrivateKey,
+     publicKeyPem: newPublicKey,
+     // additionalKeys removed — only new key remains
+   })
+   ```
+
+> Note: Tokens encrypted with the old key are no longer decryptable. Ensure client rollout is complete before removing the old key.
 
 ## Configuration
+
+### Server Configuration
+
+```typescript
+interface BoltFraudServerConfig {
+  privateKeyPem?: string                    // Private key for keyId=0 (optional in dev)
+  publicKeyPem?: string                     // Public key for keyId=0
+  blockThreshold?: number                   // Default: 70
+  challengeThreshold?: number               // Default: 30
+  store?: FingerprintStore                  // Optional IP reputation + nonce store
+  additionalKeys?: Array<{                  // For key rotation
+    keyId: number
+    publicKeyPem: string
+    privateKeyPem: string
+  }>
+}
+```
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RSA_PRIVATE_KEY_PATH` | Yes | - | Path to RSA private key PEM |
-| `RSA_PUBLIC_KEY_PATH` | Yes | - | Path to RSA public key PEM |
-| `BLOCK_THRESHOLD` | No | `70` | Score above which requests are blocked |
-| `CHALLENGE_THRESHOLD` | No | `30` | Score above which requests get CAPTCHA |
-| `REDIS_URL` | No | - | Redis URL for fingerprint history store |
+| `RSA_PRIVATE_KEY` | Yes | - | RSA private key PEM (or read from file) |
+| `RSA_PUBLIC_KEY` | Yes | - | RSA public key PEM (or read from file) |
+| `BLOCK_THRESHOLD` | No | `70` | Score ≥ this value triggers block |
+| `CHALLENGE_THRESHOLD` | No | `30` | Score ≥ this value triggers challenge |
+| `REDIS_URL` | No | - | Redis URL for fingerprint store (optional) |
+
+### Client Configuration
+
+```typescript
+interface BoltFraudConfig {
+  serverUrl: string                         // Required: API base URL
+  publicKey?: string                        // RSA public key PEM (dev: optional)
+  keyId?: number                            // Default: 0 (which key to use)
+  hookFetch?: boolean                       // Default: true
+  hookXHR?: boolean                         // Default: false
+  tokenHeader?: string                      // Default: 'x-client-data'
+  collectInterval?: number                  // Fingerprint collection interval (ms)
+  ringBufferSize?: number                   // Behavior history size
+  protectedPatterns?: RegExp[]              // URL patterns requiring tokens
+  onTokenReady?: (token: EncryptedToken) => void
+  onError?: (error: Error) => void
+}
+```
 
 ### Scoring Thresholds
 
@@ -100,13 +183,47 @@ Monitor the `reasons` array in decisions. Common patterns:
 - `mouse_entropy_too_low` — Linear mouse paths (scripted movement)
 - `canvas_fingerprint_empty_or_zero` — Headless/sandboxed environment
 
+## Custom Scorers
+
+Extend the risk engine with domain-specific scoring logic:
+
+```typescript
+import { RiskEngine, type Scorer, type ScorerResult } from '@bolt-fraud/server'
+
+class GeoIPScorer implements Scorer {
+  readonly name = 'geo'
+  score(token, context) {
+    if (!context.clientIP) return { score: 0, reasons: [] }
+
+    const country = geoipLookup(context.clientIP)
+    if (!allowedCountries.has(country)) {
+      return { score: 20, reasons: ['geo_blocked_country'] }
+    }
+    return { score: 0, reasons: [] }
+  }
+}
+
+const engine = new RiskEngine({
+  scorers: [
+    // Built-in scorers...
+    new GeoIPScorer()
+  ]
+})
+```
+
+**Best practices**:
+- Keep scorer logic simple and fast (avoid blocking operations)
+- Return descriptive reason strings for monitoring
+- Use `instantBlock: true` sparingly (reserved for high-confidence signals)
+- Consider async operations (scorer can return Promise<ScorerResult>)
+
 ## Troubleshooting
 
 ### All Requests Blocked
 
 1. **Check key configuration**: Ensure private key matches the public key used by clients
-2. **Check token header**: Verify client sends `x-client-data` header
-3. **Check thresholds**: May be too aggressive; try raising `blockThreshold`
+2. **Check token header**: Verify client sends `x-client-data` header (default: `x-client-data`)
+3. **Check thresholds**: May be too aggressive; try raising `blockThreshold` to 80
 4. **Check clock sync**: Token age check fails if server/client clocks differ by >30s
 
 ### High False Positive Rate
@@ -117,9 +234,11 @@ Monitor the `reasons` array in decisions. Common patterns:
 
 ### Token Decryption Failures
 
-1. **Key mismatch**: Client public key doesn't match server private key
-2. **Token corruption**: Proxy or CDN modifying the header value
-3. **Base64url encoding**: Ensure the token is valid base64url (no padding, `-` and `_` chars)
+1. **Key mismatch**: Client public key doesn't match server private key. Check that `publicKey` in client config matches the PEM deployed on server.
+2. **keyId mismatch**: Client sends `keyId` that server doesn't have in `additionalKeys`. Verify key rotation is complete.
+3. **Token corruption**: Proxy or CDN modifying the header value. Check raw HTTP headers in logs.
+4. **Base64url encoding**: Token must be valid base64url (no padding, using `-` and `_` chars). Verify no URL encoding applied twice.
+5. **Payload size**: Token exceeds 64 KB compressed limit. Check `MAX_TOKEN_SIZE` constant in `decrypt.ts`.
 
 ### Memory Store Growing Unbounded
 

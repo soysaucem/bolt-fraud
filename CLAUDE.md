@@ -31,16 +31,16 @@ graph TD
 | `packages/client/src/transport/` | Binary serializer, crypto, fetch/XHR hooks |
 | `packages/server/src/index.ts` | Server public API: `createBoltFraud()` |
 | `packages/server/src/model/types.ts` | Core types: Token, Decision, Fingerprint, FingerprintStore |
-| `packages/server/src/crypto/decrypt.ts` | Token decryption (AES-GCM + RSA-OAEP unwrap + binary deserializer) |
-| `packages/server/src/crypto/keys.ts` | Key generation and management |
-| `packages/server/src/scoring/engine.ts` | `RiskEngine` class — orchestrates all scoring |
-| `packages/server/src/scoring/fingerprint.ts` | Fingerprint consistency scoring |
-| `packages/server/src/scoring/automation.ts` | Automation detection scoring + instant-block |
-| `packages/server/src/scoring/behavior.ts` | Behavioral analysis (entropy, timing) |
-| `packages/server/src/store/memory.ts` | In-memory FingerprintStore implementation |
-| `packages/adapter-nestjs/src/bolt-fraud.module.ts` | NestJS DynamicModule (forRoot/forRootAsync) |
-| `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | CanActivate guard — reads x-client-data header, calls verify |
-| `packages/adapter-nestjs/src/bolt-fraud.decorator.ts` | @Protected(), @BoltFraudDecision() decorators |
+| `packages/server/src/crypto/decrypt.ts` | Token decryption: base64url decode → RSA-OAEP unwrap → AES-256-GCM decrypt → binary deserialize |
+| `packages/server/src/crypto/keys.ts` | KeyManager: load keys, get by keyId, generate key pairs (configurable RSA modulus) |
+| `packages/server/src/scoring/engine.ts` | RiskEngine: orchestrate scorer chain, nonce replay protection, decision classification |
+| `packages/server/src/scoring/fingerprint.ts` | FingerprintScorer: canvas/WebGL/audio hashes, hardware concurrency, screen dimensions |
+| `packages/server/src/scoring/automation.ts` | AutomationScorer: instant-block signals (webdriver, framework globals), scored signals |
+| `packages/server/src/scoring/behavior.ts` | BehaviorScorer: interaction detection, mouse entropy, keystroke uniformity |
+| `packages/server/src/store/memory.ts` | MemoryStore: in-memory FingerprintStore (nonce + IP tracking, no TTL cleanup) |
+| `packages/adapter-nestjs/src/bolt-fraud.module.ts` | BoltFraudModule: forRoot/forRootAsync dynamic module |
+| `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | BoltFraudGuard: CanActivate — reads token header, calls verify, injects decision |
+| `packages/adapter-nestjs/src/bolt-fraud.decorator.ts` | @BoltFraudProtected(), @BoltFraudDecision() decorators |
 
 ## Commands
 
@@ -61,7 +61,7 @@ make generate-keys    # Generate RSA key pair in keys/
 - Client tests use `jsdom` environment (browser API mocking)
 - Server tests use Node.js environment
 - Mock factories in `tests/helpers.ts` per package
-- 375+ tests across 3 packages
+- 280+ tests across 3 packages, 80%+ coverage
 
 ### Known jsdom Limitations
 
@@ -75,10 +75,12 @@ make generate-keys    # Generate RSA key pair in keys/
 - **Dual output** — tsup builds CJS + ESM
 - **Zero dependencies** — client and server packages have no runtime deps
 - **Package boundaries** — client depends on nothing; server depends on nothing; adapter-nestjs depends on server
-- **Types** — server types are canonical (`model/types.ts`); client has its own browser-specific types
-- **Scoring reasons** — use snake_case names: `canvas_fingerprint_empty_or_zero`, `no_interaction_events`
-- **Instant-block reasons** — prefixed: `instant_block:webdriver_present`
+- **Types** — server types are canonical (`model/types.ts`); client has own browser-specific types
+- **Scorer plugins** — implement `Scorer` interface with `name` property and `score()` method
+- **Scoring reasons** — use snake_case: `canvas_fingerprint_empty_or_zero`, `no_interaction_events`, `languages_empty`, `connection_rtt_zero`
+- **Instant-block reasons** — prefixed: `instant_block:webdriver_present`, `instant_block:native_function_toString_overridden`
 - **Event types** — in server, use `Bf` prefix: `BfMouseEvent`, `BfKeyboardEvent`, `BfScrollEvent`
+- **Key rotation** — `keyId` byte (u8) in first byte of token bundle for multi-key support
 
 ## Scoring Engine
 
@@ -92,6 +94,15 @@ Signals are scored independently then summed. Instant-block signals bypass scori
 ## Encryption Pipeline
 
 ```
-Client: payload → binary serialize → AES-256-GCM encrypt → RSA-OAEP wrap key → base64url encode
-Server: base64url decode → RSA-OAEP unwrap key → AES-256-GCM decrypt → binary deserialize
+Client:
+  payload → binary serialize → deflate-raw compress → AES-256-GCM encrypt (random IV)
+  → RSA-OAEP wrap AES key with server public key → bundle: [u8 keyId][u16 wrappedKeyLen][wrappedKey][12B IV][ciphertext+authTag]
+  → base64url encode
+
+Server:
+  base64url decode → parse [u8 keyId] from first byte → lookup private key by keyId
+  → RSA-OAEP unwrap AES key → AES-256-GCM decrypt with parsed IV
+  → tryDecompress (deflate-raw) → binary deserialize → validate Token shape
 ```
+
+Bundle wire format: `[1B keyId][2B wrappedKeyLen BE][wrappedKey bytes][12B random IV][ciphertext + 16B GCM authTag]`

@@ -410,42 +410,96 @@ if (behavior.totalMouseEvents === 0 && behavior.totalKeyboardEvents === 0) {
 
 ## 5. Risk Scoring Engine
 
-The server runs four independent scorers in parallel and sums their results to classify the request.
+The risk engine orchestrates a chain of independent **Scorer** implementations and sums their results to classify the request.
 
-### 5.1 Scoring Pipeline
+### 5.1 Scorer Architecture
+
+```mermaid
+graph LR
+  T["Token<br/>(fingerprint, detection, behavior)"] --> R["RiskEngine"]
+
+  R -->|nonce replay check| S1["AutomationScorer"]
+  S1 -->|instant-block?| IB["Instant Block<br/>score=100"]
+  S1 -->|scored signals| S2["FingerprintScorer"]
+
+  S2 --> S3["BehaviorScorer"]
+  S3 --> S4["TokenAgeScorer"]
+  S4 --> S5["IPReputationScorer"]
+
+  IB --> D["Classify<br/>against thresholds"]
+  S1 -->|partial score| ACC["Accumulate<br/>totalScore"]
+  S2 --> ACC
+  S3 --> ACC
+  S4 --> ACC
+  S5 --> ACC
+  ACC --> D
+
+  D --> A["Allow<br/>score < 30"]
+  D --> C["Challenge<br/>30 <= score < 70"]
+  D --> B["Block<br/>score >= 70"]
+```
+
+### 5.2 Scoring Pipeline
 
 ```
-Input: Token (fingerprint, detection, behavior)
+Input: Token + clientIP
   ↓
-[1] Score Automation
-    - Check instant-block signals (webdriver, framework globals)
-    - Check integrity violations
-    - If instant-block: return score=100, block=true, skip remaining scorers
-    - Otherwise: accumulate scored signals (languages_empty, connection_rtt_zero)
+[Check Nonce Replay]
+  Store.hasSeenNonce(token.nonce)?
+  If yes: instant-block "token_nonce_replayed"
   ↓
-[2] Score Fingerprint
-    - Check canvas, WebGL, audio hashes (empty/zero)
-    - Check hardware concurrency, screen dimensions
-    - Check suspicious suppression patterns (both canvas+WebGL empty but real UA)
+[Run Scorer Chain]
+  For each scorer in [AutomationScorer, FingerprintScorer, BehaviorScorer, TokenAgeScorer, IPReputationScorer]:
+    result = scorer.score(token, { clientIP, store })
+    if result.instantBlock:
+      Save nonce, return immediately with decision=block, reasons=[...]
+    else:
+      totalScore += result.score
+      allReasons.push(...result.reasons)
   ↓
-[3] Score Behavior
-    - Check for zero interactions
-    - Compute mouse entropy (if 3+ events)
-    - Compute keystroke uniformity (if 4+ events)
-  ↓
-[4] Score Freshness & IP Reputation
-    - Check token age (older than 30s = +10)
-    - Check IP reputation (same fingerprint seen from 100+ IPs = +5)
-  ↓
-Total Score = automation + fingerprint + behavior + age + ip
+[Save Fingerprint + Nonce]
+  Store.saveFingerprint(fpHash, clientIP)
+  Store.saveNonce(token.nonce, 60000ms)
   ↓
 [Classify]
-  if total > blockThreshold (70):  → Block
-  elif total >= challengeThreshold (30):  → Challenge
+  if totalScore >= blockThreshold (70):  → Block
+  elif totalScore >= challengeThreshold (30):  → Challenge
   else:  → Allow
 ```
 
-### 5.2 Score Accumulation
+### 5.3 Custom Scorers
+
+Implement the `Scorer` interface to add custom logic:
+
+```typescript
+interface Scorer {
+  readonly name: string
+  score(token: Token, context: ScoringContext): ScorerResult | Promise<ScorerResult>
+}
+
+interface ScorerResult {
+  readonly score: number
+  readonly reasons: readonly string[]
+  readonly instantBlock?: boolean
+}
+```
+
+Pass custom scorers to `RiskEngine` constructor:
+
+```typescript
+const engine = new RiskEngine({
+  scorers: [
+    new AutomationScorer(),
+    new FingerprintScorer(),
+    new BehaviorScorer(),
+    new TokenAgeScorer(30_000, 300_000),
+    new IPReputationScorer(100),
+    new CustomScorer(),  // User-provided
+  ]
+})
+```
+
+### 5.4 Score Accumulation
 
 Each scorer returns a non-negative integer score and a list of reason strings.
 
@@ -482,7 +536,7 @@ const DEFAULT_BLOCK_THRESHOLD = 70
 const DEFAULT_CHALLENGE_THRESHOLD = 30
 ```
 
-### 5.3 Fingerprint Hash for IP Tracking
+### 5.5 Fingerprint Hash for IP Tracking
 
 The engine computes a stable fingerprint hash for IP reputation tracking:
 
@@ -509,12 +563,15 @@ Tokens are encrypted end-to-end to prevent tampering, replay, and inspection.
 
 **Wire format**:
 ```
+[1 byte: keyId]
 [2 bytes: wrappedKeyLength BE]
-[N bytes: wrappedKey]
+[N bytes: wrappedKey (RSA-OAEP encrypted AES-256 key)]
 [12 bytes: IV (random per encryption)]
 [M bytes: ciphertext (GCM authenticated)]
 → base64url encode entire bundle
 ```
+
+The **keyId byte** enables key rotation: the server can maintain multiple private keys and route decryption to the correct one based on the first byte of the bundle.
 
 **Encryption process**:
 
@@ -532,16 +589,44 @@ Tokens are encrypted end-to-end to prevent tampering, replay, and inspection.
 **Decryption process** (server):
 
 1. **Base64url decode** the received token
-2. **Parse bundle** header to extract wrappedKeyLength
-3. **Extract sections**: wrappedKey, IV, ciphertext
-4. **Unwrap AES key** using server's private RSA-2048 key
+2. **Extract keyId** from first byte of bundle
+3. **Lookup private key** by keyId (enables key rotation)
+4. **Parse bundle** header to extract wrappedKeyLength
+5. **Extract sections**: wrappedKey, IV, ciphertext
+6. **Unwrap AES key** using the selected private RSA key
    - `aesKey = RSA-OAEP.unwrapKey(wrappedKey, serverPrivateKey)`
-5. **Decrypt payload** using AES-256-GCM with extracted IV
+7. **Decrypt payload** using AES-256-GCM with extracted IV
    - `plaintext = AES-GCM.decrypt(ciphertext, aesKey, iv)`
    - Decryption fails (throws) if ciphertext was tampered with
-6. **Deserialize** binary payload
+8. **Deserialize** binary payload
 
-### 6.2 Security Properties
+### 6.2 Key Rotation Flow
+
+```mermaid
+sequenceDiagram
+  participant Admin
+  participant Server
+  participant Client
+
+  Admin->>Server: Deploy new key pair (keyId=1)
+  Note over Server: KeyManager has both keyId=0 and keyId=1
+  Admin->>Client: Push new public key with keyId=1
+  Note over Client: New tokens use keyId=1
+
+  par
+    Client->>Server: Token with keyId=1
+    Server->>Server: Decrypt with keyId=1 (new)
+  and
+    Client->>Server: Old token with keyId=0
+    Server->>Server: Decrypt with keyId=0 (old)
+  end
+
+  Admin->>Server: Remove old keyId=0 from KeyManager
+```
+
+The server maintains multiple keys via `createBoltFraud({ additionalKeys: [...] })`. Each token's first byte identifies which key to use for decryption.
+
+### 6.3 Security Properties
 
 **Confidentiality**:
 - AES-256 key derivation not exposed (wrapped, never transmitted in plaintext)
@@ -554,13 +639,15 @@ Tokens are encrypted end-to-end to prevent tampering, replay, and inspection.
 **Freshness**:
 - Random IV per encryption ensures different ciphertexts for same plaintext
 - Token timestamp allows detecting tokens replayed from the past
-- Server rejects tokens older than 30s
+- Server rejects tokens older than 5 minutes (instant block)
+- Nonce replay protection with 60-second TTL
 
-**No Key Rotation Overhead**:
-- Server can rotate RSA keys by distributing new public key in SDK
-- Old tokens become unreadable but decryption just fails gracefully
+**Key Rotation**:
+- Server can maintain multiple keys simultaneously via `additionalKeys`
+- Client embeds keyId in the token (first byte)
+- Seamless rotation with no downtime or client sync required
 
-### 6.3 Binary Serialization Format
+### 6.4 Binary Serialization Format
 
 The payload is serialized into a compact binary format before encryption (approximately 300-1500 bytes):
 
@@ -596,7 +683,7 @@ The payload is serialized into a compact binary format before encryption (approx
 
 **Strings** are prefixed with u16 length in bytes, encoded as UTF-8.
 
-**Compression**: The binary blob is not compressed; encryption provides sufficient size reduction already.
+**Compression**: Client applies deflate-raw (RFC 1951, no zlib header) compression before encryption. Server attempts decompression on the decrypted plaintext (skips if decompression fails). The decompressed result is validated to start with 0x01 (binary version marker) or 0x7b (JSON '{' = 0x7b) before deserializing. This approach handles both compressed and uncompressed tokens gracefully.
 
 ## 7. Security Properties and Limitations
 
@@ -634,7 +721,14 @@ writeU16(length)      // max value: 65535
 writeBytes(data)      // data must fit in u16
 ```
 
-This ensures the deserialized payload can't exceed ~65 KB even if the encrypted payload is much larger, protecting against decompression bombs. There is no separate compression step.
+Additionally, the server enforces decompressed size limits:
+
+```typescript
+const MAX_TOKEN_SIZE = 65_536           // 64 KB compressed
+const MAX_DECOMPRESSED_SIZE = 262_144   // 256 KB decompressed
+```
+
+These limits protect against decompression bombs while allowing realistic token sizes.
 
 ### 7.4 Replay Protection
 
