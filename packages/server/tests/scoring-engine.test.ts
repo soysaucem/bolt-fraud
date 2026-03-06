@@ -360,10 +360,10 @@ describe('RiskEngine', () => {
       expect(decision.reasons).not.toContain('token_too_old')
     })
 
-    it('adds token_too_old when token is 5 minutes old', async () => {
-      // Arrange: very stale token (e.g. replay attack)
+    it('adds token_too_old when token is 60 seconds old', async () => {
+      // Arrange: stale token beyond soft max (30s) but within absolute max (300s)
       const engine = new RiskEngine()
-      const token = createMockToken({ timestamp: Date.now() - 300_000 })
+      const token = createMockToken({ timestamp: Date.now() - 60_000 })
 
       // Act
       const decision = await engine.score(token)
