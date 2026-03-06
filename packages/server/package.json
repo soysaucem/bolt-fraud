@@ -25,6 +25,14 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
   },
+  "peerDependencies": {
+    "ioredis": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^25.3.3",
     "@vitest/coverage-v8": "^1.6.0",

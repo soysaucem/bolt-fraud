@@ -39,6 +39,8 @@ export { RiskEngine, computeFingerprintHash, AutomationScorer, FingerprintScorer
 export type { Scorer, ScorerResult, ScoringContext } from './scoring/engine.js'
 export { KeyManager, generateKeyPairSync, generateKeyPairAsync } from './crypto/keys.js'
 export { MemoryStore } from './store/memory.js'
+export { RedisStore } from './store/redis.js'
+export type { RedisStoreOptions } from './store/redis.js'
 export { decryptToken, decryptTokenDev, base64urlDecode } from './crypto/decrypt.js'
 export { computeKeystrokeUniformity, computeMouseEntropy } from './scoring/behavior.js'
 
