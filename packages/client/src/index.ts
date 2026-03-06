@@ -29,31 +29,41 @@ const SDK_VERSION = '1.0.0'
 let _config: BoltFraudConfig | null = null
 let _initialized = false
 let _cachedDetection: DetectionResult | null = null
+let _initPromise: Promise<void> | null = null
 
-export async function init(config: BoltFraudConfig): Promise<void> {
-  if (_initialized && _config?.serverUrl === config.serverUrl) {
-    return
+export function init(config: BoltFraudConfig): Promise<void> {
+  if (_initialized && _config?.serverUrl === config.serverUrl && _config?.publicKey === config.publicKey) {
+    return Promise.resolve()
   }
   if (!config.serverUrl) {
     throw new Error('[bolt-fraud] config.serverUrl is required')
   }
-  _config = config
-  _initialized = true
 
-  // Run detection BEFORE installing hooks to avoid false positives from our own hooks
-  // being detected as integrity violations (e.g., fetch/XHR overrides flagged as non-native).
-  _cachedDetection = await runDetection()
+  _initPromise = (async () => {
+    _config = config
+    _initialized = true
 
-  // Start behavior collection
-  startBehaviorCollection(config.ringBufferSize)
+    // Run detection BEFORE installing hooks to avoid false positives from our own hooks
+    // being detected as integrity violations (e.g., fetch/XHR overrides flagged as non-native).
+    _cachedDetection = await runDetection()
 
-  // Auto-install hooks if configured
-  if (config.hookFetch !== false) {
-    installFetchHook(config)
-  }
-  if (config.hookXHR) {
-    installXHRHook(config)
-  }
+    // Start behavior collection
+    startBehaviorCollection(config.ringBufferSize)
+
+    // Auto-install hooks if configured
+    if (config.hookFetch !== false) {
+      installFetchHook(config)
+    }
+    if (config.hookXHR) {
+      installXHRHook(config)
+    }
+  })()
+
+  _initPromise.finally(() => {
+    _initPromise = null
+  })
+
+  return _initPromise
 }
 
 export async function getToken(): Promise<EncryptedToken> {
@@ -102,7 +112,11 @@ export function hookXHR(): void {
   installXHRHook(_config!)
 }
 
-export function destroy(): void {
+export async function destroy(): Promise<void> {
+  if (_initPromise) {
+    await _initPromise.catch(() => {})  // await in-flight init, ignore errors
+    _initPromise = null
+  }
   stopBehaviorCollection()
   uninstallHooks()
   _config = null

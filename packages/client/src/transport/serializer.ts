@@ -123,7 +123,9 @@ export function serialize(payload: TokenPayload): Uint8Array {
   writer.writeU32(beh.totalMouseEvents)
   writer.writeU32(beh.totalKeyboardEvents)
   writer.writeU32(beh.totalScrollEvents)
-  writer.writeU32(Math.round(beh.snapshotAt))
+  const snap = Math.round(beh.snapshotAt)
+  writer.writeU32(Math.floor(snap / 0x1_0000_0000))  // high
+  writer.writeU32(snap >>> 0)                          // low
 
   return writer.finish()
 }
@@ -236,7 +238,9 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   const totalMouseEvents = reader.readU32()
   const totalKeyboardEvents = reader.readU32()
   const totalScrollEvents = reader.readU32()
-  const snapshotAt = reader.readU32()
+  const snapshotAtHigh = reader.readU32()
+  const snapshotAtLow = reader.readU32()
+  const snapshotAt = snapshotAtHigh * 0x1_0000_0000 + snapshotAtLow
 
   return {
     timestamp,

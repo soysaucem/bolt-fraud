@@ -1,10 +1,5 @@
 import type { CanvasFingerprint } from '../types.js'
-
-export function arrayBufferToHex(buffer: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-}
+import { arrayBufferToHex } from './utils.js'
 
 /**
  * Render a deterministic canvas scene and return its SHA-256 hash.

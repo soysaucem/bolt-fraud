@@ -20,7 +20,7 @@ export function installFetchHook(config: BoltFraudConfig): void {
       const { getToken } = await import('../index.js')
       const token = await getToken()
       const headers = new Headers(init?.headers)
-      headers.set(config.tokenHeader ?? 'X-Client-Data', JSON.stringify(token))
+      headers.set(config.tokenHeader ?? 'X-Client-Data', token.token)
       return _originalFetch!(input, { ...init, headers })
     }
     return _originalFetch!(input, init)
@@ -64,7 +64,7 @@ export function installXHRHook(config: BoltFraudConfig): void {
         try {
           const { getToken } = await import('../index.js')
           const token = await getToken()
-          self.setRequestHeader(config.tokenHeader ?? 'X-Client-Data', JSON.stringify(token))
+          self.setRequestHeader(config.tokenHeader ?? 'X-Client-Data', token.token)
         } catch {
           // Token generation failed — send without token
         }
@@ -96,22 +96,13 @@ export function uninstallHooks(): void {
   }
 }
 
-export function shouldProtect(
-  url: string | URL | Request,
-  config: BoltFraudConfig,
-): boolean {
-  const urlStr = url instanceof Request ? url.url : String(url)
-
-  // If patterns are specified, match against them
+export function shouldProtect(url: string, config: BoltFraudConfig): boolean {
   if (config.protectedPatterns && config.protectedPatterns.length > 0) {
-    return config.protectedPatterns.some((pattern) => pattern.test(urlStr))
+    return config.protectedPatterns.some((pattern) => pattern.test(url))
   }
-
-  // Default: same-origin check
   if (typeof window === 'undefined') return false
-
   try {
-    const parsed = new URL(urlStr, window.location.href)
+    const parsed = new URL(url, window.location.href)
     return parsed.origin === window.location.origin
   } catch {
     return false

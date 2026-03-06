@@ -1,5 +1,5 @@
 import type { AudioFingerprint } from '../types.js'
-import { arrayBufferToHex } from './canvas.js'
+import { arrayBufferToHex } from './utils.js'
 
 /**
  * Audio fingerprint via OfflineAudioContext oscillator + compressor.

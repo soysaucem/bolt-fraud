@@ -24,7 +24,9 @@ export class ScrollTracker {
     this._listening = true
 
     this._onScroll = () => {
-      this.push(this._buildEvent())
+      const now = performance.now()
+      if (now - this._lastEventAt < ScrollTracker.THROTTLE_MS) return
+      this.push(this._buildEvent(now))
     }
 
     document.addEventListener('scroll', this._onScroll, { passive: true })
@@ -41,7 +43,6 @@ export class ScrollTracker {
   }
 
   push(event: BfScrollEvent): void {
-    if (event.t - this._lastEventAt < ScrollTracker.THROTTLE_MS) return
     this._lastEventAt = event.t
     this._buffer[this._head] = event
     this._head = (this._head + 1) % this._capacity
@@ -65,11 +66,11 @@ export class ScrollTracker {
     return this._totalEvents
   }
 
-  private _buildEvent(): BfScrollEvent {
+  private _buildEvent(t: number): BfScrollEvent {
     return {
       x: typeof window !== 'undefined' ? window.scrollX : 0,
       y: typeof window !== 'undefined' ? window.scrollY : 0,
-      t: performance.now(),
+      t,
     }
   }
 }

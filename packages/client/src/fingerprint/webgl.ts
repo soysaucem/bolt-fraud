@@ -1,5 +1,5 @@
 import type { WebGLFingerprint } from '../types.js'
-import { arrayBufferToHex } from './canvas.js'
+import { arrayBufferToHex } from './utils.js'
 
 // Extension interface for unmasked renderer info
 interface WebGLDebugRendererInfo {
