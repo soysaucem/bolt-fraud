@@ -78,33 +78,17 @@ export async function getCanvasFingerprint(): Promise<CanvasFingerprint> {
       ctx.fillText(text, x, y)
     }
 
-    // Extract image data URL
-    let dataURL: string
-    if (canvas instanceof OffscreenCanvas) {
-      const blob = await canvas.convertToBlob({ type: 'image/png' })
-      dataURL = await blobToDataURL(blob)
-    } else {
-      try {
-        dataURL = canvas.toDataURL('image/png')
-      } catch {
-        // SecurityError in cross-origin iframes
-        return { hash: '' }
-      }
+    // Hash raw RGBA pixel data instead of PNG-encoded output.
+    // PNG encoders vary across browsers and produce different base64 for identical pixels.
+    try {
+      const imageData = ctx.getImageData(0, 0, 400, 200)
+      const hashBuffer = await crypto.subtle.digest('SHA-256', imageData.data)
+      return { hash: arrayBufferToHex(hashBuffer) }
+    } catch {
+      // getImageData throws SecurityError on tainted (cross-origin) canvases
+      return { hash: '' }
     }
-
-    const encoded = new TextEncoder().encode(dataURL)
-    const hashBuffer = await crypto.subtle.digest('SHA-256', encoded)
-    return { hash: arrayBufferToHex(hashBuffer) }
   } catch {
     return { hash: '' }
   }
-}
-
-function blobToDataURL(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
 }
