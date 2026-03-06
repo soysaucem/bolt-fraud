@@ -1,6 +1,6 @@
 {
   "name": "@soysaucem/bolt-fraud-adapter-express",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Express middleware adapter for bolt-fraud anti-bot verification",
   "type": "module",
   "main": "./dist/index.cjs",
