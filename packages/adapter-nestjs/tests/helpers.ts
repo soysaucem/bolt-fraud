@@ -4,7 +4,7 @@ import type { Decision } from '@bolt-fraud/server'
 export interface MockRequest {
   headers: Record<string, string | undefined>
   ip?: string
-  connection?: { remoteAddress?: string }
+  socket?: { remoteAddress?: string }
   boltFraudDecision?: Decision
 }
 

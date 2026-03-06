@@ -57,13 +57,13 @@ describe('BoltFraudGuard', () => {
     expect(verifySpy).toHaveBeenCalledWith('encrypted-token-data', '192.168.1.1')
   })
 
-  it('falls back to connection.remoteAddress when ip is not set', async () => {
+  it('falls back to socket.remoteAddress when ip is not set', async () => {
     const decision = createAllowDecision()
     const { guard, mockBoltFraud } = createGuard(decision)
     const verifySpy = vi.spyOn(mockBoltFraud, 'verify')
     const request: MockRequest = {
       headers: { 'x-client-data': 'some-token' },
-      connection: { remoteAddress: '10.0.0.1' },
+      socket: { remoteAddress: '10.0.0.1' },
     }
     const ctx = createMockExecutionContext(request)
 
@@ -209,8 +209,8 @@ describe('BoltFraudGuard', () => {
     }
   })
 
-  it('propagates errors thrown by boltFraud.verify()', async () => {
-    // Arrange
+  it('returns 403 with verification_error when boltFraud.verify() throws', async () => {
+    // Arrange: verify() throws — guard should catch and return 403 with verification_error reason
     const mockBoltFraud = createMockBoltFraud()
     const verifyError = new Error('decrypt_failed: corrupted ciphertext')
     vi.spyOn(mockBoltFraud, 'verify').mockRejectedValue(verifyError)
@@ -221,7 +221,15 @@ describe('BoltFraudGuard', () => {
     }
     const ctx = createMockExecutionContext(request)
 
-    // Act & Assert
-    await expect(guard.canActivate(ctx)).rejects.toThrow('decrypt_failed: corrupted ciphertext')
+    // Act & Assert: guard catches the error and throws 403 HttpException
+    try {
+      await guard.canActivate(ctx)
+      expect.fail('should have thrown')
+    } catch (e) {
+      expect(e).toBeInstanceOf(HttpException)
+      expect((e as HttpException).getStatus()).toBe(HttpStatus.FORBIDDEN)
+      const response = (e as HttpException).getResponse() as Record<string, unknown>
+      expect(response.reason).toBe('verification_error')
+    }
   })
 })
