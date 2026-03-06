@@ -8,11 +8,11 @@ Anti-bot detection system. TypeScript monorepo with 4 packages: client SDK (brow
 
 ```mermaid
 graph TD
-  Client["@bolt-fraud/client (browser)"] -->|encrypted token| Server["@bolt-fraud/server (Node.js)"]
+  Client["@soysaucem/bolt-fraud-client (browser)"] -->|encrypted token| Server["@soysaucem/bolt-fraud-server (Node.js)"]
   Server --> Scoring[Risk Scoring Engine]
   Scoring --> Decision["allow / challenge / block"]
-  NestAdapter["@bolt-fraud/adapter-nestjs"] --> Server
-  ExpressAdapter["@bolt-fraud/adapter-express"] --> Server
+  NestAdapter["@soysaucem/bolt-fraud-adapter-nestjs"] --> Server
+  ExpressAdapter["@soysaucem/bolt-fraud-adapter-express"] --> Server
   Server -->|store| Store["FingerprintStore<br/>(Memory or Redis)"]
 ```
 

@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express'
-import { createBoltFraud, type BoltFraudServerConfig, type Decision } from '@bolt-fraud/server'
+import { createBoltFraud, type BoltFraudServerConfig, type Decision } from '@soysaucem/bolt-fraud-server'
 import './types.js'
 
 const MAX_TOKEN_LENGTH = 65_536 // 64 KB base64 encoded

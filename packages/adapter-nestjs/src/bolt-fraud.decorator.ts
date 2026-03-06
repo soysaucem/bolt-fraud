@@ -1,5 +1,5 @@
 import { createParamDecorator, type ExecutionContext, UseGuards, applyDecorators } from '@nestjs/common'
-import type { Decision } from '@bolt-fraud/server'
+import type { Decision } from '@soysaucem/bolt-fraud-server'
 import { BoltFraudGuard } from './bolt-fraud.guard.js'
 
 /**

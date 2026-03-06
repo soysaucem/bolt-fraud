@@ -1,5 +1,5 @@
 import { Module, type DynamicModule, type Provider } from '@nestjs/common'
-import { createBoltFraud, type BoltFraudServerConfig, type BoltFraud } from '@bolt-fraud/server'
+import { createBoltFraud, type BoltFraudServerConfig, type BoltFraud } from '@soysaucem/bolt-fraud-server'
 import { BoltFraudGuard } from './bolt-fraud.guard.js'
 
 export const BOLT_FRAUD_INSTANCE = 'BOLT_FRAUD_INSTANCE'

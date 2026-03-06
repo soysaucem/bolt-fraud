@@ -20,21 +20,21 @@ make generate-keys
 ```
 bolt-fraud/
 ├── packages/
-│   ├── client/          # @bolt-fraud/client — browser SDK
+│   ├── client/          # @soysaucem/bolt-fraud-client — browser SDK
 │   │   ├── src/
 │   │   │   ├── fingerprint/   # Canvas, WebGL, audio, navigator, screen collectors
 │   │   │   ├── detection/     # Automation detection, integrity validation
 │   │   │   ├── behavior/      # Mouse, keyboard, scroll tracking (ring buffers)
 │   │   │   └── transport/     # Binary serializer, AES-GCM + RSA encryption, fetch/XHR hooks
 │   │   └── tests/
-│   ├── server/          # @bolt-fraud/server — framework-agnostic verification
+│   ├── server/          # @soysaucem/bolt-fraud-server — framework-agnostic verification
 │   │   ├── src/
 │   │   │   ├── crypto/        # Token decryption, key management
 │   │   │   ├── scoring/       # Risk engine (fingerprint, automation, behavior scoring)
 │   │   │   ├── model/         # Core types (Token, Decision, Fingerprint, Store)
 │   │   │   └── store/         # In-memory store (pluggable via FingerprintStore interface)
 │   │   └── tests/
-│   └── adapter-nestjs/  # @bolt-fraud/adapter-nestjs — NestJS module + guard
+│   └── adapter-nestjs/  # @soysaucem/bolt-fraud-adapter-nestjs — NestJS module + guard
 │       ├── src/
 │       └── tests/
 ├── shared/
@@ -80,11 +80,11 @@ All packages use **Vitest**. Client tests run in a `jsdom` environment for brows
 
 ## Package Boundaries
 
-- `@bolt-fraud/client` depends on **nothing** (browser-only, zero dependencies)
-- `@bolt-fraud/server` depends on **nothing** (Node.js crypto only)
-- `@bolt-fraud/adapter-nestjs` depends on `@bolt-fraud/server` + NestJS peer deps
+- `@soysaucem/bolt-fraud-client` depends on **nothing** (browser-only, zero dependencies)
+- `@soysaucem/bolt-fraud-server` depends on **nothing** (Node.js crypto only)
+- `@soysaucem/bolt-fraud-adapter-nestjs` depends on `@soysaucem/bolt-fraud-server` + NestJS peer deps
 
-Shared types are defined in `@bolt-fraud/server` (`model/types.ts`) and re-exported. Client has its own types for browser-specific interfaces.
+Shared types are defined in `@soysaucem/bolt-fraud-server` (`model/types.ts`) and re-exported. Client has its own types for browser-specific interfaces.
 
 ## Build
 

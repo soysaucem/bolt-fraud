@@ -12,7 +12,7 @@
  *   bf:nonce:<nonce>          — Redis String (value "1") with EX
  *
  * Usage:
- *   import { RedisStore } from '@bolt-fraud/server'
+ *   import { RedisStore } from '@soysaucem/bolt-fraud-server'
  *   import Redis from 'ioredis'
  *
  *   // Option A: pass a connection URL

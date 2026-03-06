@@ -23,7 +23,7 @@ openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 ### Programmatic Key Generation
 
 ```typescript
-import { generateKeyPair, generateKeyPairAsync } from '@bolt-fraud/server'
+import { generateKeyPair, generateKeyPairAsync } from '@soysaucem/bolt-fraud-server'
 
 // Synchronous
 const keys = generateKeyPair()
@@ -188,7 +188,7 @@ Monitor the `reasons` array in decisions. Common patterns:
 Extend the risk engine with domain-specific scoring logic:
 
 ```typescript
-import { RiskEngine, type Scorer, type ScorerResult } from '@bolt-fraud/server'
+import { RiskEngine, type Scorer, type ScorerResult } from '@soysaucem/bolt-fraud-server'
 
 class GeoIPScorer implements Scorer {
   readonly name = 'geo'
@@ -245,7 +245,7 @@ const engine = new RiskEngine({
 The in-memory `MemoryStore` does not evict entries. For production, use the built-in `RedisStore`:
 
 ```typescript
-import { createBoltFraud, RedisStore } from '@bolt-fraud/server'
+import { createBoltFraud, RedisStore } from '@soysaucem/bolt-fraud-server'
 import fs from 'node:fs'
 
 // Option A: Redis URL (RedisStore owns connection)
@@ -277,7 +277,7 @@ process.on('SIGTERM', async () => {
 ### Connection Options
 
 ```typescript
-import { RedisStore } from '@bolt-fraud/server'
+import { RedisStore } from '@soysaucem/bolt-fraud-server'
 
 // Option A: Connection URL (RedisStore creates and owns the connection)
 const store = new RedisStore('redis://localhost:6379')
@@ -331,7 +331,7 @@ new RedisStore('redis://localhost:6379', {
 Monitor Redis connectivity and performance:
 
 ```typescript
-import { RedisStore } from '@bolt-fraud/server'
+import { RedisStore } from '@soysaucem/bolt-fraud-server'
 
 const store = new RedisStore(process.env.REDIS_URL)
 

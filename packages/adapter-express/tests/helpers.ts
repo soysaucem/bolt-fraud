@@ -1,6 +1,6 @@
 import { vi } from 'vitest'
 import type { Request, Response, NextFunction } from 'express'
-import type { Decision } from '@bolt-fraud/server'
+import type { Decision } from '@soysaucem/bolt-fraud-server'
 
 // ─── Mock Request ─────────────────────────────────────────────────────────────
 

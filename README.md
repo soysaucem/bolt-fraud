@@ -7,7 +7,7 @@ Full-stack anti-bot detection system. Collects device fingerprints, detects auto
 ```mermaid
 graph LR
   subgraph Browser
-    SDK["@bolt-fraud/client"]
+    SDK["@soysaucem/bolt-fraud-client"]
     SDK -->|collect| FP[Fingerprint]
     SDK -->|detect| AD[Automation Detection]
     SDK -->|track| BH[Behavior Telemetry]
@@ -17,8 +17,8 @@ graph LR
   TK -->|x-client-data header| API[Your API]
 
   subgraph Server
-    API --> Adapters["@bolt-fraud/adapter-nestjs<br/>@bolt-fraud/adapter-express"]
-    Adapters --> Core["@bolt-fraud/server"]
+    API --> Adapters["@soysaucem/bolt-fraud-adapter-nestjs<br/>@soysaucem/bolt-fraud-adapter-express"]
+    Adapters --> Core["@soysaucem/bolt-fraud-server"]
     Core -->|decrypt| Dec[Token Decryption]
     Core -->|score| SE[Scoring Engine]
     SE --> Decision{allow / challenge / block}
@@ -30,10 +30,10 @@ graph LR
 
 | Package | Description |
 |---------|-------------|
-| `@bolt-fraud/client` | Browser SDK — fingerprinting, automation detection, behavioral telemetry, encryption |
-| `@bolt-fraud/server` | Server core — decryption, risk scoring engine, fingerprint store interface |
-| `@bolt-fraud/adapter-nestjs` | NestJS integration — module, guard, decorators |
-| `@bolt-fraud/adapter-express` | Express middleware adapter for standalone Node.js apps |
+| `@soysaucem/bolt-fraud-client` | Browser SDK — fingerprinting, automation detection, behavioral telemetry, encryption |
+| `@soysaucem/bolt-fraud-server` | Server core — decryption, risk scoring engine, fingerprint store interface |
+| `@soysaucem/bolt-fraud-adapter-nestjs` | NestJS integration — module, guard, decorators |
+| `@soysaucem/bolt-fraud-adapter-express` | Express middleware adapter for standalone Node.js apps |
 
 ## Quick Start
 
@@ -41,21 +41,21 @@ graph LR
 
 **Client SDK (browser)**:
 ```bash
-npm install @bolt-fraud/client
+npm install @soysaucem/bolt-fraud-client
 ```
 
 **Server core**:
 ```bash
-npm install @bolt-fraud/server
+npm install @soysaucem/bolt-fraud-server
 ```
 
 **Choose your adapter**:
 ```bash
 # NestJS
-npm install @bolt-fraud/adapter-nestjs
+npm install @soysaucem/bolt-fraud-adapter-nestjs
 
 # Or Express
-npm install @bolt-fraud/adapter-express
+npm install @soysaucem/bolt-fraud-adapter-express
 ```
 
 ### 2. Generate RSA Keys
@@ -68,7 +68,7 @@ make generate-keys
 To use a different key size:
 
 ```typescript
-import { generateKeyPairAsync } from '@bolt-fraud/server'
+import { generateKeyPairAsync } from '@soysaucem/bolt-fraud-server'
 
 // 4096-bit RSA (slower, more secure)
 const keys = await generateKeyPairAsync(4096)
@@ -77,7 +77,7 @@ const keys = await generateKeyPairAsync(4096)
 ### 3. Client SDK
 
 ```typescript
-import { init, getToken } from '@bolt-fraud/client'
+import { init, getToken } from '@soysaucem/bolt-fraud-client'
 
 await init({
   serverUrl: 'https://api.example.com',
@@ -105,7 +105,7 @@ The SDK automatically:
 ### 4. Server Verification
 
 ```typescript
-import { createBoltFraud, toClientSafeDecision } from '@bolt-fraud/server'
+import { createBoltFraud, toClientSafeDecision } from '@soysaucem/bolt-fraud-server'
 import fs from 'node:fs'
 
 const bf = createBoltFraud({
@@ -140,7 +140,7 @@ const clientDecision = toClientSafeDecision(decision)
 
 ```typescript
 import { Module } from '@nestjs/common'
-import { BoltFraudModule } from '@bolt-fraud/adapter-nestjs'
+import { BoltFraudModule } from '@soysaucem/bolt-fraud-adapter-nestjs'
 
 @Module({
   imports: [
@@ -158,8 +158,8 @@ Protect routes with the guard:
 
 ```typescript
 import { Controller, Get } from '@nestjs/common'
-import { BoltFraudProtected, BoltFraudDecision } from '@bolt-fraud/adapter-nestjs'
-import type { Decision } from '@bolt-fraud/server'
+import { BoltFraudProtected, BoltFraudDecision } from '@soysaucem/bolt-fraud-adapter-nestjs'
+import type { Decision } from '@soysaucem/bolt-fraud-server'
 
 @Controller('api')
 export class ApiController {
@@ -179,7 +179,7 @@ For Express apps (or any Express-compatible framework):
 
 ```typescript
 import express from 'express'
-import { boltFraudMiddleware } from '@bolt-fraud/adapter-express'
+import { boltFraudMiddleware } from '@soysaucem/bolt-fraud-adapter-express'
 import fs from 'node:fs'
 
 const app = express()
@@ -224,8 +224,8 @@ The middleware:
 By default, the server uses an in-memory store. For production, use Redis with TTL-based cleanup:
 
 ```typescript
-import { createBoltFraud } from '@bolt-fraud/server'
-import { RedisStore } from '@bolt-fraud/server'
+import { createBoltFraud } from '@soysaucem/bolt-fraud-server'
+import { RedisStore } from '@soysaucem/bolt-fraud-server'
 import fs from 'node:fs'
 
 // Option A: Pass a Redis URL (RedisStore owns the connection)
@@ -296,8 +296,8 @@ These trigger immediate block (score=100, instantBlock=true):
 Extend the risk engine with custom scoring logic:
 
 ```typescript
-import { RiskEngine, type Scorer, type ScorerResult, type ScoringContext } from '@bolt-fraud/server'
-import type { Token } from '@bolt-fraud/server'
+import { RiskEngine, type Scorer, type ScorerResult, type ScoringContext } from '@soysaucem/bolt-fraud-server'
+import type { Token } from '@soysaucem/bolt-fraud-server'
 
 class CustomScorer implements Scorer {
   readonly name = 'custom'

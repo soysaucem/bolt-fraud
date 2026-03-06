@@ -1,5 +1,5 @@
 {
-  "name": "@bolt-fraud/server",
+  "name": "@soysaucem/bolt-fraud-server",
   "version": "0.2.0",
   "description": "Server-side anti-bot token verification and risk scoring",
   "type": "module",
@@ -39,6 +39,14 @@
     "tsup": "^8.1.0",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/soysaucem/bolt-fraud.git",
+    "directory": "packages/server"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "engines": {
     "node": ">=22"

@@ -12,15 +12,15 @@ import {
   asResponse,
 } from './helpers.js'
 
-// ─── Mock @bolt-fraud/server ─────────────────────────────────────────────────
+// ─── Mock @soysaucem/bolt-fraud-server ─────────────────────────────────────────────────
 
 const mockBoltFraud = createMockBoltFraud()
 
-vi.mock('@bolt-fraud/server', () => ({
+vi.mock('@soysaucem/bolt-fraud-server', () => ({
   createBoltFraud: vi.fn(() => mockBoltFraud),
 }))
 
-import { createBoltFraud } from '@bolt-fraud/server'
+import { createBoltFraud } from '@soysaucem/bolt-fraud-server'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

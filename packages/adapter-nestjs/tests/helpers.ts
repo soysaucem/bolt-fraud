@@ -1,5 +1,5 @@
 import type { ExecutionContext } from '@nestjs/common'
-import type { Decision } from '@bolt-fraud/server'
+import type { Decision } from '@soysaucem/bolt-fraud-server'
 
 export interface MockRequest {
   headers: Record<string, string | undefined>

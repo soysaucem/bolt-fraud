@@ -21,6 +21,7 @@ concurrency:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -64,7 +65,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: https://registry.npmjs.org
+          registry-url: https://npm.pkg.github.com
 
       - name: Configure git
         run: |
@@ -133,6 +134,31 @@ jobs:
       - name: Pack Express adapter
         run: npm pack --dry-run
         working-directory: packages/adapter-express
+
+      # Publish to npm
+      - name: Publish client
+        run: npm publish --access public
+        working-directory: packages/client
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish server
+        run: npm publish --access public
+        working-directory: packages/server
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish NestJS adapter
+        run: npm publish --access public
+        working-directory: packages/adapter-nestjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Express adapter
+        run: npm publish --access public
+        working-directory: packages/adapter-express
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Commit version bump and tag
       - name: Commit and tag

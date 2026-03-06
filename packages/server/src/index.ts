@@ -1,8 +1,8 @@
 /**
- * @bolt-fraud/server — Framework-agnostic anti-bot verification.
+ * @soysaucem/bolt-fraud-server — Framework-agnostic anti-bot verification.
  *
  * Usage:
- *   import { createBoltFraud } from '@bolt-fraud/server'
+ *   import { createBoltFraud } from '@soysaucem/bolt-fraud-server'
  *
  *   const bf = createBoltFraud({
  *     privateKeyPem: fs.readFileSync('keys/private.pem', 'utf-8'),

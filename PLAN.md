@@ -8,9 +8,9 @@ Inspired by reverse engineering Shopee's SFU (Secure Fetch Utils) SDK. Shopee us
 
 ## Tech Stack
 
-- **Client SDK**: TypeScript, runs in browser (`@bolt-fraud/client`)
-- **Server Core**: TypeScript, Node.js package (`@bolt-fraud/server`) — framework-agnostic
-- **NestJS Adapter**: TypeScript, NestJS module (`@bolt-fraud/adapter-nestjs`)
+- **Client SDK**: TypeScript, runs in browser (`@soysaucem/bolt-fraud-client`)
+- **Server Core**: TypeScript, Node.js package (`@soysaucem/bolt-fraud-server`) — framework-agnostic
+- **NestJS Adapter**: TypeScript, NestJS module (`@soysaucem/bolt-fraud-adapter-nestjs`)
 - **Storage**: Redis (fingerprint history, pluggable via `FingerprintStore` interface)
 
 ## Architecture
@@ -18,7 +18,7 @@ Inspired by reverse engineering Shopee's SFU (Secure Fetch Utils) SDK. Shopee us
 ```
 Browser → [Client SDK (TS)] → HTTP Request with token header
                                         ↓
-Backend (NestJS/Express/etc) → [BoltFraudGuard] → [@bolt-fraud/server] → Decision
+Backend (NestJS/Express/etc) → [BoltFraudGuard] → [@soysaucem/bolt-fraud-server] → Decision
                                                          ↓
                                                    [FingerprintStore]
 ```

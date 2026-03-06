@@ -1,4 +1,4 @@
-import type { Decision } from '@bolt-fraud/server'
+import type { Decision } from '@soysaucem/bolt-fraud-server'
 
 declare global {
   namespace Express {

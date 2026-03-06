@@ -1,5 +1,5 @@
 {
-  "name": "@bolt-fraud/adapter-nestjs",
+  "name": "@soysaucem/bolt-fraud-adapter-nestjs",
   "version": "0.2.0",
   "description": "NestJS adapter for bolt-fraud anti-bot verification",
   "type": "module",
@@ -25,7 +25,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@bolt-fraud/server": "^0.1.0"
+    "@soysaucem/bolt-fraud-server": "*"
   },
   "peerDependencies": {
     "@nestjs/common": "^10.0.0",
@@ -41,6 +41,14 @@
     "tsup": "^8.1.0",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/soysaucem/bolt-fraud.git",
+    "directory": "packages/adapter-nestjs"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "engines": {
     "node": ">=22"

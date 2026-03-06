@@ -38,7 +38,7 @@ jobs:
       - name: Typecheck server
         run: npx tsc --noEmit -p packages/server/tsconfig.json
 
-      # Adapter imports from @bolt-fraud/server dist, so build server first
+      # Adapter imports from @soysaucem/bolt-fraud-server dist, so build server first
       - name: Build server (adapter dependency)
         run: npx tsup
         working-directory: packages/server
