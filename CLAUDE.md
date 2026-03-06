@@ -25,6 +25,7 @@ graph TD
 | `packages/client/src/index.ts` | Client public API: `init()`, `getToken()`, `destroy()` |
 | `packages/client/src/types.ts` | All client-side types |
 | `packages/client/src/fingerprint/` | Canvas, WebGL, audio, navigator, screen collectors |
+| `packages/client/src/fingerprint/utils.ts` | Shared fingerprint utilities (arrayBufferToHex) |
 | `packages/client/src/detection/` | Automation detection, integrity validation |
 | `packages/client/src/behavior/` | Mouse, keyboard, scroll ring buffer trackers |
 | `packages/client/src/transport/` | Binary serializer, crypto, fetch/XHR hooks |
@@ -38,7 +39,7 @@ graph TD
 | `packages/server/src/scoring/behavior.ts` | Behavioral analysis (entropy, timing) |
 | `packages/server/src/store/memory.ts` | In-memory FingerprintStore implementation |
 | `packages/adapter-nestjs/src/bolt-fraud.module.ts` | NestJS DynamicModule (forRoot/forRootAsync) |
-| `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | CanActivate guard — reads x-client-data, calls verify |
+| `packages/adapter-nestjs/src/bolt-fraud.guard.ts` | CanActivate guard — reads x-client-data header, calls verify |
 | `packages/adapter-nestjs/src/bolt-fraud.decorator.ts` | @Protected(), @BoltFraudDecision() decorators |
 
 ## Commands
@@ -60,7 +61,7 @@ make generate-keys    # Generate RSA key pair in keys/
 - Client tests use `jsdom` environment (browser API mocking)
 - Server tests use Node.js environment
 - Mock factories in `tests/helpers.ts` per package
-- 240+ tests across 3 packages
+- 375+ tests across 3 packages
 
 ### Known jsdom Limitations
 
@@ -77,6 +78,7 @@ make generate-keys    # Generate RSA key pair in keys/
 - **Types** — server types are canonical (`model/types.ts`); client has its own browser-specific types
 - **Scoring reasons** — use snake_case names: `canvas_fingerprint_empty_or_zero`, `no_interaction_events`
 - **Instant-block reasons** — prefixed: `instant_block:webdriver_present`
+- **Event types** — in server, use `Bf` prefix: `BfMouseEvent`, `BfKeyboardEvent`, `BfScrollEvent`
 
 ## Scoring Engine
 
@@ -85,6 +87,7 @@ Signals are scored independently then summed. Instant-block signals bypass scori
 - Block threshold: 70 (configurable)
 - Challenge threshold: 30 (configurable)
 - Instant-block signals: `webdriver_present`, `puppeteer_runtime`, `playwright_runtime`, `selenium_runtime`, `phantom_runtime`, prototype chain tampered, native toString overridden
+- Nonce replay is instant-blocked. Tokens older than 5 minutes are instant-blocked.
 
 ## Encryption Pipeline
 

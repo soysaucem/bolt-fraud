@@ -92,6 +92,8 @@ Monitor the `reasons` array in decisions. Common patterns:
 - `token_decryption_failed` — Invalid/tampered token, key mismatch
 - `token_timestamp_future` — Clock skew or replay attack
 - `token_too_old` — Token older than 30s (replay or slow client)
+- `token_nonce_replayed` — Same nonce seen within 60s window (replay attack)
+- `token_expired` — Token older than 5 minutes (instant block)
 - `instant_block:webdriver_present` — Selenium WebDriver detected
 - `instant_block:puppeteer_runtime` — Puppeteer detected
 - `no_interaction_events` — No mouse/keyboard activity (headless browser)

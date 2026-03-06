@@ -91,6 +91,10 @@ const bf = createBoltFraud({
   publicKeyPem: fs.readFileSync('keys/public.pem', 'utf-8'),
   blockThreshold: 70,
   challengeThreshold: 30,
+  // Optional:
+  // ipCountThreshold: 100,    // IPs per fingerprint before penalty
+  // maxTokenAgeMs: 30_000,    // Token age penalty window
+  // maxTokenAbsoluteAgeMs: 300_000,  // Hard token expiry (instant block)
 })
 
 // In your request handler:
@@ -153,12 +157,16 @@ export class ApiController {
 | Canvas fingerprint empty/zero | +25 | No |
 | WebGL fingerprint empty | +25 | No |
 | Audio fingerprint empty/zero | +20 | No |
+| Stack trace contains headless keywords | +15 | No |
+| User-Agent claims headless browser | +20 | No |
 | No mouse/keyboard events | +15 | No |
 | Mouse entropy too low | +15 | No |
 | Keystroke timing too uniform | +10 | No |
 | Token older than 30s | +10 | No |
 | `hardwareConcurrency === 0` | +5 | No |
 | Fingerprint seen from 100+ IPs | +5 | No |
+| Token nonce replayed | - | Yes |
+| Token expired (>5min) | - | Yes |
 
 **Thresholds** (configurable):
 - Score < 30: **Allow**

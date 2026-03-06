@@ -8,9 +8,13 @@
 | `window.webdriver` present | - | Yes |
 | Prototype chain tampered | Critical | Yes |
 | Native function toString() overridden | Critical | Yes |
+| Token nonce replayed | - | Yes |
+| Token expired (>5 minutes) | - | Yes |
 | Canvas fingerprint inconsistent with claimed UA | High (25) | No |
 | WebGL renderer doesn't match claimed GPU | High (25) | No |
 | Audio fingerprint is zero/constant (virtualized) | High (20) | No |
+| User-Agent claims headless browser | High (20) | No |
+| Stack trace contains headless keywords | High (15) | No |
 | No mouse/keyboard events in 10s+ | Medium (15) | No |
 | Mouse movement entropy too low (linear paths) | Medium (15) | No |
 | Keystroke timing too uniform | Medium (10) | No |

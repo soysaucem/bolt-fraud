@@ -32,6 +32,31 @@ graph LR
 - **Future tokens**: Tokens with timestamps more than 5 seconds in the future trigger an instant block (clock skew or fraud).
 - **Token size**: Approximately 1-3 KB when encrypted depending on interaction history.
 
+### Token Nonce Replay Protection
+
+Each token includes a cryptographically random nonce (16 bytes, base64url-encoded). The server tracks seen nonces in the `FingerprintStore` with a 60-second TTL.
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Server
+  participant Store
+
+  Client->>Server: Token (nonce=abc123)
+  Server->>Store: hasSeenNonce("abc123")?
+  Store-->>Server: false
+  Server->>Store: saveNonce("abc123", ttl=60s)
+  Server-->>Client: Decision (allow/challenge/block)
+
+  Note over Client,Server: Attacker replays same token
+  Client->>Server: Token (nonce=abc123)
+  Server->>Store: hasSeenNonce("abc123")?
+  Store-->>Server: true
+  Server-->>Client: Instant block (token_nonce_replayed)
+```
+
+A replayed nonce results in an **instant block** with reason `token_nonce_replayed`, regardless of the token's risk score.
+
 ## 2. Fingerprinting Algorithms
 
 Device fingerprinting leverages hardware-level rendering pipelines to create stable, device-unique identifiers. Each fingerprint collector targets a different hardware layer.
@@ -208,8 +233,8 @@ These signals contribute to the overall risk score but don't trigger instant blo
 |--------|-----------------|-------|----------------|
 | `languages_empty` | Check `navigator.languages.length === 0` | +10 | Real browsers always have at least one language. Bots often have none. |
 | `connection_rtt_zero` | Check `navigator.connection.rtt === 0` | +10 | Zero round-trip time is unphysical on real networks. Headless network stacks report this. |
-| `stack_trace_headless` | Capture stack trace, check for "puppeteer", "playwright", "selenium", "webdriver" strings | Not scored; added to reasons if present | Stack frames leak framework names during automation calls. |
-| `user_agent_headless` | Regex test for "HeadlessChrome" or "PhantomJS" in user-agent | Not scored; added to reasons | Headless mode is often explicitly named in the UA string. |
+| `stack_trace_headless` | Capture stack trace, check for "puppeteer", "playwright", "selenium", "webdriver" strings | +15 | Stack frames leak framework names during automation calls. |
+| `user_agent_headless` | Regex test for "HeadlessChrome" or "PhantomJS" in user-agent | +20 | Headless mode is often explicitly named in the UA string. |
 
 ### 3.3 Integrity Violations
 
