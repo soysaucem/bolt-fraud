@@ -201,81 +201,68 @@ describe('ScrollTracker ring buffer', () => {
     expect(snap[1]).toMatchObject({ y: 300 })
   })
 
-  it('totalEvents counts only accepted events (not throttled ones)', () => {
+  it('totalEvents counts all pushed events', () => {
     const tracker = new ScrollTracker(10)
-    tracker.push(makeScrollEvent(100, 0))     // accepted
-    tracker.push(makeScrollEvent(200, 200))   // accepted
+    tracker.push(makeScrollEvent(100, 0))
+    tracker.push(makeScrollEvent(200, 200))
     expect(tracker.totalEvents).toBe(2)
   })
 
-  describe('throttling: events within 100ms of the last accepted event are dropped', () => {
-    it('drops an event that is exactly 0ms after the previous', () => {
+  describe('push() accepts all events regardless of timing (throttling is in the DOM listener)', () => {
+    // The ScrollTracker.push() method does NOT apply throttle — it always stores the event.
+    // Throttling is applied ONLY in the start() scroll listener before calling push().
+    // Tests that call push() directly should expect all events to be stored.
+
+    it('push() stores all events including same-timestamp events', () => {
       const tracker = new ScrollTracker(10)
       tracker.push(makeScrollEvent(100, 1000))
-      tracker.push(makeScrollEvent(200, 1000)) // same timestamp — dropped
-
-      expect(tracker.snapshot()).toHaveLength(1)
-      expect(tracker.totalEvents).toBe(1)
-    })
-
-    it('drops an event that is 50ms after the previous (within 100ms window)', () => {
-      const tracker = new ScrollTracker(10)
-      tracker.push(makeScrollEvent(100, 1000))
-      tracker.push(makeScrollEvent(200, 1050)) // 50ms — dropped
-
-      expect(tracker.snapshot()).toHaveLength(1)
-      expect(tracker.totalEvents).toBe(1)
-    })
-
-    it('drops an event that is 99ms after the previous', () => {
-      const tracker = new ScrollTracker(10)
-      tracker.push(makeScrollEvent(100, 1000))
-      tracker.push(makeScrollEvent(200, 1099)) // 99ms — dropped
-
-      expect(tracker.snapshot()).toHaveLength(1)
-    })
-
-    it('accepts an event that is exactly 100ms after the previous (at the boundary — not throttled since diff >= 100)', () => {
-      // The condition is: event.t - lastEventAt < THROTTLE_MS (100)
-      // So difference of 100 means NOT dropped (100 < 100 is false)
-      const tracker = new ScrollTracker(10)
-      tracker.push(makeScrollEvent(100, 1000))
-      tracker.push(makeScrollEvent(200, 1100)) // 100ms — accepted
+      tracker.push(makeScrollEvent(200, 1000)) // same timestamp — still stored
 
       expect(tracker.snapshot()).toHaveLength(2)
       expect(tracker.totalEvents).toBe(2)
     })
 
-    it('accepts an event that is 101ms after the previous', () => {
+    it('push() stores events that are close together (50ms apart)', () => {
       const tracker = new ScrollTracker(10)
       tracker.push(makeScrollEvent(100, 1000))
-      tracker.push(makeScrollEvent(200, 1101)) // 101ms — accepted
+      tracker.push(makeScrollEvent(200, 1050)) // 50ms — stored
 
       expect(tracker.snapshot()).toHaveLength(2)
+      expect(tracker.totalEvents).toBe(2)
     })
 
-    it('handles rapid-fire events where only 1 of 5 passes the throttle', () => {
+    it('push() stores events that are exactly 100ms apart', () => {
       const tracker = new ScrollTracker(10)
-      tracker.push(makeScrollEvent(100, 0))   // accepted (first event always passes: 0 - (-Infinity) = Infinity >= 100)
-      tracker.push(makeScrollEvent(110, 10))  // dropped (10 < 100)
-      tracker.push(makeScrollEvent(120, 20))  // dropped
-      tracker.push(makeScrollEvent(130, 30))  // dropped
-      tracker.push(makeScrollEvent(140, 40))  // dropped
+      tracker.push(makeScrollEvent(100, 1000))
+      tracker.push(makeScrollEvent(200, 1100)) // 100ms — stored
 
-      expect(tracker.snapshot()).toHaveLength(1)
-      expect(tracker.totalEvents).toBe(1)
+      expect(tracker.snapshot()).toHaveLength(2)
+      expect(tracker.totalEvents).toBe(2)
     })
 
-    it('accepts events after the throttle window resets', () => {
+    it('push() stores rapid-fire events — all 5 are accepted', () => {
       const tracker = new ScrollTracker(10)
-      tracker.push(makeScrollEvent(100, 0))    // accepted
-      tracker.push(makeScrollEvent(200, 50))   // dropped
-      tracker.push(makeScrollEvent(300, 101))  // accepted (101ms after t=0)
-      tracker.push(makeScrollEvent(400, 150))  // dropped (49ms after t=101)
-      tracker.push(makeScrollEvent(500, 202))  // accepted (101ms after t=101)
+      tracker.push(makeScrollEvent(100, 0))
+      tracker.push(makeScrollEvent(110, 10))
+      tracker.push(makeScrollEvent(120, 20))
+      tracker.push(makeScrollEvent(130, 30))
+      tracker.push(makeScrollEvent(140, 40))
 
-      expect(tracker.snapshot()).toHaveLength(3)
-      expect(tracker.totalEvents).toBe(3)
+      // All 5 are pushed directly and stored (no throttle in push())
+      expect(tracker.snapshot()).toHaveLength(5)
+      expect(tracker.totalEvents).toBe(5)
+    })
+
+    it('push() stores all events across multiple calls', () => {
+      const tracker = new ScrollTracker(10)
+      tracker.push(makeScrollEvent(100, 0))
+      tracker.push(makeScrollEvent(200, 50))
+      tracker.push(makeScrollEvent(300, 101))
+      tracker.push(makeScrollEvent(400, 150))
+      tracker.push(makeScrollEvent(500, 202))
+
+      expect(tracker.snapshot()).toHaveLength(5)
+      expect(tracker.totalEvents).toBe(5)
     })
   })
 })

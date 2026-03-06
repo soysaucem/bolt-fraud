@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { arrayBufferToHex } from '../src/fingerprint/canvas.js'
+import { arrayBufferToHex } from '../src/fingerprint/utils.js'
 
 // ─── arrayBufferToHex ─────────────────────────────────────────────────────────
 

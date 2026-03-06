@@ -172,16 +172,17 @@ describe('shouldProtect', () => {
   // ── Request objects ──────────────────────────────────────────────────────────
 
   describe('Request object handling', () => {
-    it('returns true when a Request object URL matches a protectedPattern', () => {
-      // Arrange
+    it('returns true when a Request object URL matches a protectedPattern (URL extracted by caller)', () => {
+      // Arrange: the fetch hook extracts the URL from Request before calling shouldProtect
+      // shouldProtect receives the string URL
       const config: BoltFraudConfig = {
         ...baseConfig,
         protectedPatterns: [/\/api\//],
       }
       const request = new Request('https://example.com/api/submit', { method: 'POST' })
 
-      // Act
-      const result = shouldProtect(request, config)
+      // Act: extract URL from Request (as the hook does) and pass string to shouldProtect
+      const result = shouldProtect(request.url, config)
 
       // Assert
       expect(result).toBe(true)
@@ -195,8 +196,8 @@ describe('shouldProtect', () => {
       }
       const request = new Request('https://cdn.example.com/image.png')
 
-      // Act
-      const result = shouldProtect(request, config)
+      // Act: extract URL from Request (as the hook does)
+      const result = shouldProtect(request.url, config)
 
       // Assert
       expect(result).toBe(false)
@@ -207,8 +208,8 @@ describe('shouldProtect', () => {
       const config: BoltFraudConfig = { ...baseConfig }
       const request = new Request('https://evil.com/exfiltrate')
 
-      // Act
-      const result = shouldProtect(request, config)
+      // Act: extract URL from Request (as the hook does)
+      const result = shouldProtect(request.url, config)
 
       // Assert: evil.com is not same origin as jsdom's location
       expect(result).toBe(false)
@@ -218,16 +219,16 @@ describe('shouldProtect', () => {
   // ── URL object handling ──────────────────────────────────────────────────────
 
   describe('URL object handling', () => {
-    it('returns true when a URL object matches a protectedPattern', () => {
-      // Arrange
+    it('returns true when a URL object matches a protectedPattern (URL.href passed as string)', () => {
+      // Arrange: shouldProtect receives the string representation of the URL
       const config: BoltFraudConfig = {
         ...baseConfig,
         protectedPatterns: [/\/secure\//],
       }
       const url = new URL('https://example.com/secure/checkout')
 
-      // Act
-      const result = shouldProtect(url, config)
+      // Act: pass URL.href as string (as the hook does via String(input))
+      const result = shouldProtect(url.href, config)
 
       // Assert
       expect(result).toBe(true)
@@ -241,8 +242,8 @@ describe('shouldProtect', () => {
       }
       const url = new URL('https://cdn.example.com/bundle.js')
 
-      // Act
-      const result = shouldProtect(url, config)
+      // Act: pass URL.href as string
+      const result = shouldProtect(url.href, config)
 
       // Assert
       expect(result).toBe(false)

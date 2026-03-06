@@ -70,18 +70,28 @@ describe('SDK init() lifecycle', () => {
   describe('init() validation', () => {
     it('throws when serverUrl is missing', async () => {
       // Arrange: config without serverUrl
-      // Act + Assert
-      await expect(
+      // init() may throw synchronously or return a rejected promise — handle both
+      let thrown: unknown
+      try {
         // @ts-expect-error — intentionally passing invalid config to test runtime validation
-        init({ publicKey: undefined }),
-      ).rejects.toThrow('[bolt-fraud] config.serverUrl is required')
+        await init({ publicKey: undefined })
+      } catch (err) {
+        thrown = err
+      }
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toMatch('[bolt-fraud] config.serverUrl is required')
     })
 
     it('throws when serverUrl is an empty string', async () => {
-      // Act + Assert
-      await expect(
-        init({ serverUrl: '' }),
-      ).rejects.toThrow('[bolt-fraud] config.serverUrl is required')
+      // init() may throw synchronously or return a rejected promise — handle both
+      let thrown: unknown
+      try {
+        await init({ serverUrl: '' })
+      } catch (err) {
+        thrown = err
+      }
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toMatch('[bolt-fraud] config.serverUrl is required')
     })
 
     it('does not throw with a valid serverUrl', async () => {
