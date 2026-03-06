@@ -1,4 +1,4 @@
-import type { Token, Decision, DecisionType, FingerprintStore } from '../model/types.js'
+import type { Token, Decision, FingerprintStore } from '../model/types.js'
 import { scoreFingerprint } from './fingerprint.js'
 import { scoreAutomation } from './automation.js'
 import { scoreBehavior } from './behavior.js'
@@ -9,6 +9,22 @@ const DEFAULT_IP_COUNT_THRESHOLD = 100
 const DEFAULT_MAX_TOKEN_AGE_MS = 30_000
 const DEFAULT_MAX_TOKEN_ABSOLUTE_AGE_MS = 300_000
 
+export interface ScorerResult {
+  readonly score: number
+  readonly reasons: readonly string[]
+  readonly instantBlock?: boolean
+}
+
+export interface ScoringContext {
+  readonly clientIP?: string
+  readonly store?: FingerprintStore
+}
+
+export interface Scorer {
+  readonly name: string
+  score(token: Token, context: ScoringContext): ScorerResult | Promise<ScorerResult>
+}
+
 export interface RiskEngineConfig {
   readonly blockThreshold?: number
   readonly challengeThreshold?: number
@@ -16,6 +32,7 @@ export interface RiskEngineConfig {
   readonly ipCountThreshold?: number
   readonly maxTokenAgeMs?: number
   readonly maxTokenAbsoluteAgeMs?: number
+  readonly scorers?: readonly Scorer[]
 }
 
 /**
@@ -31,6 +48,74 @@ export function computeFingerprintHash(token: Token): string {
   )
 }
 
+class AutomationScorer implements Scorer {
+  readonly name = 'automation'
+  score(token: Token): ScorerResult {
+    const result = scoreAutomation(token.detection)
+    return { score: result.score, reasons: [...result.reasons], instantBlock: result.instantBlock }
+  }
+}
+
+class FingerprintScorer implements Scorer {
+  readonly name = 'fingerprint'
+  score(token: Token): ScorerResult {
+    return scoreFingerprint(token.fingerprint)
+  }
+}
+
+class BehaviorScorer implements Scorer {
+  readonly name = 'behavior'
+  score(token: Token): ScorerResult {
+    return scoreBehavior(token.behavior)
+  }
+}
+
+class TokenAgeScorer implements Scorer {
+  private readonly _maxTokenAgeMs: number
+  private readonly _maxTokenAbsoluteAgeMs: number
+
+  constructor(maxTokenAgeMs: number, maxTokenAbsoluteAgeMs: number) {
+    this._maxTokenAgeMs = maxTokenAgeMs
+    this._maxTokenAbsoluteAgeMs = maxTokenAbsoluteAgeMs
+  }
+
+  readonly name = 'token_age'
+  score(token: Token): ScorerResult {
+    const now = Date.now()
+    if (token.timestamp > now + 5000) {
+      return { score: 100, reasons: ['token_timestamp_future'], instantBlock: true }
+    }
+    if (now - token.timestamp > this._maxTokenAbsoluteAgeMs) {
+      return { score: 100, reasons: ['token_expired'], instantBlock: true }
+    }
+    if (now - token.timestamp > this._maxTokenAgeMs) {
+      return { score: 10, reasons: ['token_too_old'] }
+    }
+    return { score: 0, reasons: [] }
+  }
+}
+
+class IPReputationScorer implements Scorer {
+  private readonly _ipCountThreshold: number
+
+  constructor(ipCountThreshold: number) {
+    this._ipCountThreshold = ipCountThreshold
+  }
+
+  readonly name = 'ip_reputation'
+  async score(token: Token, context: ScoringContext): Promise<ScorerResult> {
+    if (!context.clientIP || !context.store) return { score: 0, reasons: [] }
+    const fpHash = computeFingerprintHash(token)
+    const ipCount = await context.store.getIPCount(fpHash)
+    if (ipCount > this._ipCountThreshold) {
+      return { score: 5, reasons: ['fingerprint_ip_abuse'] }
+    }
+    return { score: 0, reasons: [] }
+  }
+}
+
+export { AutomationScorer, FingerprintScorer, BehaviorScorer, TokenAgeScorer, IPReputationScorer }
+
 export class RiskEngine {
   private readonly _blockThreshold: number
   private readonly _challengeThreshold: number
@@ -38,6 +123,7 @@ export class RiskEngine {
   private readonly _ipCountThreshold: number
   private readonly _maxTokenAgeMs: number
   private readonly _maxTokenAbsoluteAgeMs: number
+  private readonly _scorers: readonly Scorer[]
 
   constructor(config: RiskEngineConfig = {}) {
     this._blockThreshold = config.blockThreshold ?? DEFAULT_BLOCK_THRESHOLD
@@ -46,11 +132,16 @@ export class RiskEngine {
     this._ipCountThreshold = config.ipCountThreshold ?? DEFAULT_IP_COUNT_THRESHOLD
     this._maxTokenAgeMs = config.maxTokenAgeMs ?? DEFAULT_MAX_TOKEN_AGE_MS
     this._maxTokenAbsoluteAgeMs = config.maxTokenAbsoluteAgeMs ?? DEFAULT_MAX_TOKEN_ABSOLUTE_AGE_MS
+    this._scorers = config.scorers ?? [
+      new AutomationScorer(),
+      new FingerprintScorer(),
+      new BehaviorScorer(),
+      new TokenAgeScorer(this._maxTokenAgeMs, this._maxTokenAbsoluteAgeMs),
+      new IPReputationScorer(this._ipCountThreshold),
+    ]
   }
 
   async score(token: Token, clientIP?: string): Promise<Decision> {
-    const now = Date.now()
-
     // Nonce replay protection — check before any other scoring
     if (this._store?.hasSeenNonce) {
       const replayed = await this._store.hasSeenNonce(token.nonce)
@@ -64,87 +155,39 @@ export class RiskEngine {
       }
     }
 
-    // Token timestamp from the future — clocks don't run backwards; instant block
-    if (token.timestamp > now + 5000) {
-      return {
-        decision: 'block',
-        score: 100,
-        instantBlock: true,
-        reasons: ['token_timestamp_future'],
+    const context: ScoringContext = { clientIP, store: this._store ?? undefined }
+    let totalScore = 0
+    const allReasons: string[] = []
+
+    for (const scorer of this._scorers) {
+      const result = await scorer.score(token, context)
+      if (result.instantBlock) {
+        // Short-circuit on instant block — save nonce then return immediately
+        if (this._store?.saveNonce) {
+          await this._store.saveNonce(token.nonce, 60_000)
+        }
+        return { decision: 'block', score: 100, instantBlock: true, reasons: [...result.reasons] }
       }
+      totalScore += result.score
+      allReasons.push(...result.reasons)
     }
 
-    // Hard absolute expiry — token too old to be legitimate
-    if (now - token.timestamp > this._maxTokenAbsoluteAgeMs) {
-      return {
-        decision: 'block',
-        score: 100,
-        instantBlock: true,
-        reasons: ['token_expired'],
-      }
-    }
-
-    // Check instant-block signals first
-    const { score: automationScore, instantBlock, reasons: automationReasons } = scoreAutomation(token.detection)
-
-    if (instantBlock) {
-      return {
-        decision: 'block',
-        score: 100,
-        instantBlock: true,
-        reasons: automationReasons,
-      }
-    }
-
-    const { score: fpScore, reasons: fpReasons } = scoreFingerprint(token.fingerprint)
-    const { score: behaviorScore, reasons: behaviorReasons } = scoreBehavior(token.behavior)
-
-    // Token age: tokens older than configured threshold are suspect (replay attack or clock skew)
-    let ageScore = 0
-    const ageReasons: string[] = []
-    if (now - token.timestamp > this._maxTokenAgeMs) {
-      ageScore = 10
-      ageReasons.push('token_too_old')
-    }
-
-    let ipScore = 0
-    const ipReasons: string[] = []
-    if (this._store && clientIP) {
+    // Save fingerprint + nonce after scoring
+    if (clientIP && this._store) {
       const fpHash = computeFingerprintHash(token)
-      const ipCount = await this._store.getIPCount(fpHash)
-      if (ipCount > this._ipCountThreshold) {
-        ipScore = 5
-        ipReasons.push('fingerprint_ip_abuse')
-      }
+      await this._store.saveFingerprint(fpHash, clientIP)
     }
-
-    const totalScore = automationScore + fpScore + behaviorScore + ageScore + ipScore
-    const decision = this._classify(totalScore)
-
-    const allReasons = [
-      ...automationReasons,
-      ...fpReasons,
-      ...behaviorReasons,
-      ...ageReasons,
-      ...ipReasons,
-    ]
-
-    // Save nonce after scoring to prevent replay
     if (this._store?.saveNonce) {
       await this._store.saveNonce(token.nonce, 60_000)
     }
 
-    return {
-      decision,
-      score: totalScore,
-      instantBlock: false,
-      reasons: allReasons,
+    if (totalScore >= this._blockThreshold) {
+      return { decision: 'block', score: totalScore, instantBlock: false, reasons: allReasons }
     }
+    if (totalScore >= this._challengeThreshold) {
+      return { decision: 'challenge', score: totalScore, instantBlock: false, reasons: allReasons }
+    }
+    return { decision: 'allow', score: totalScore, instantBlock: false, reasons: allReasons }
   }
 
-  private _classify(score: number): DecisionType {
-    if (score > this._blockThreshold) return 'block'
-    if (score >= this._challengeThreshold) return 'challenge'
-    return 'allow'
-  }
 }
