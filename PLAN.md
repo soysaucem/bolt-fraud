@@ -8,88 +8,91 @@ Inspired by reverse engineering Shopee's SFU (Secure Fetch Utils) SDK. Shopee us
 
 ## Tech Stack
 
-- **Client SDK**: TypeScript, runs in browser
-- **Server**: Go + Chi router
-- **Storage**: Redis (fingerprint history for repeat-visitor analysis)
+- **Client SDK**: TypeScript, runs in browser (`@bolt-fraud/client`)
+- **Server Core**: TypeScript, Node.js package (`@bolt-fraud/server`) — framework-agnostic
+- **NestJS Adapter**: TypeScript, NestJS module (`@bolt-fraud/adapter-nestjs`)
+- **Storage**: Redis (fingerprint history, pluggable via `FingerprintStore` interface)
 
 ## Architecture
 
 ```
-Browser → [Client SDK (TS)] → POST /verify → [Go API Server] → risk score
-                                                    ↓
-                                              [Redis/DB store]
+Browser → [Client SDK (TS)] → HTTP Request with token header
+                                        ↓
+Backend (NestJS/Express/etc) → [BoltFraudGuard] → [@bolt-fraud/server] → Decision
+                                                         ↓
+                                                   [FingerprintStore]
 ```
 
 ## Project Structure
 
 ```
 bolt-fraud/
-├── client/                     # TypeScript client SDK (browser)
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── src/
-│   │   ├── index.ts            # Public API: init(), getToken(), hookFetch()
-│   │   ├── fingerprint/
-│   │   │   ├── canvas.ts       # Canvas 2D fingerprint (draw shapes → toDataURL → hash)
-│   │   │   ├── webgl.ts        # WebGL fingerprint (shader render → readPixels + params)
-│   │   │   ├── audio.ts        # AudioContext fingerprint (oscillator → buffer hash)
-│   │   │   ├── navigator.ts    # navigator props (UA, hardwareConcurrency, languages, plugins)
-│   │   │   ├── screen.ts       # Screen dimensions, color depth, device pixel ratio
-│   │   │   └── index.ts        # Orchestrate all collectors → combined fingerprint object
-│   │   ├── detection/
-│   │   │   ├── automation.ts   # Detect Puppeteer/Playwright/Selenium/PhantomJS
-│   │   │   ├── integrity.ts    # Validate prototype chains, native function toString()
-│   │   │   └── index.ts        # Combined detection result
-│   │   ├── behavior/
-│   │   │   ├── mouse.ts        # Mouse movement/click telemetry (ring buffer)
-│   │   │   ├── keyboard.ts     # Keystroke timing patterns
-│   │   │   ├── scroll.ts       # Scroll behavior tracking
-│   │   │   └── index.ts        # Serialize behavioral data to binary format
-│   │   ├── transport/
-│   │   │   ├── serializer.ts   # Binary serialization (uint8/16/32/64 format)
-│   │   │   ├── crypto.ts       # AES-GCM encryption + RSA key wrapping
-│   │   │   ├── hook.ts         # fetch/XHR interceptor (inject token headers)
-│   │   │   └── index.ts
-│   │   └── types.ts            # All client-side types
-│   └── tests/
-│       ├── canvas.test.ts
-│       ├── automation.test.ts
-│       ├── serializer.test.ts
-│       └── crypto.test.ts
-├── server/                     # Go backend API
-│   ├── go.mod
-│   ├── go.sum
-│   ├── cmd/
-│   │   └── server/
-│   │       └── main.go         # Entry point, Chi router, graceful shutdown
-│   ├── internal/
-│   │   ├── handler/
-│   │   │   ├── verify.go       # POST /verify — decrypt token, score, return decision
-│   │   │   └── health.go       # GET /health
-│   │   ├── crypto/
-│   │   │   ├── decrypt.go      # AES-GCM decryption + RSA private key unwrap
-│   │   │   └── keys.go         # Key management (generate, rotate, load from env)
-│   │   ├── scoring/
-│   │   │   ├── engine.go       # Risk scoring engine (weighted signals)
-│   │   │   ├── fingerprint.go  # Fingerprint consistency checks
-│   │   │   ├── automation.go   # Automation detection signal processing
-│   │   │   └── behavior.go     # Behavioral analysis (entropy, timing patterns)
-│   │   ├── model/
-│   │   │   ├── token.go        # Deserialized token struct
-│   │   │   ├── decision.go     # Allow/Block/Challenge enum + response
-│   │   │   └── fingerprint.go  # Fingerprint data struct
-│   │   └── store/
-│   │       ├── store.go        # Interface for fingerprint storage
-│   │       └── memory.go       # In-memory store (swap for Redis later)
-│   └── internal/config/
-│       └── config.go           # Env-based config (port, keys, thresholds)
+├── packages/
+│   ├── client/                     # TypeScript client SDK (browser)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   ├── tsup.config.ts
+│   │   ├── src/
+│   │   │   ├── index.ts            # Public API: init(), getToken(), hookFetch()
+│   │   │   ├── types.ts            # All client-side types
+│   │   │   ├── fingerprint/
+│   │   │   │   ├── canvas.ts       # Canvas 2D fingerprint (SHA-256 hash)
+│   │   │   │   ├── webgl.ts        # WebGL fingerprint (shader + GPU metadata)
+│   │   │   │   ├── audio.ts        # AudioContext fingerprint (oscillator hash)
+│   │   │   │   ├── navigator.ts    # navigator props
+│   │   │   │   ├── screen.ts       # Screen dimensions, DPR
+│   │   │   │   └── index.ts        # Orchestrate all collectors
+│   │   │   ├── detection/
+│   │   │   │   ├── automation.ts   # Detect Puppeteer/Playwright/Selenium/PhantomJS
+│   │   │   │   ├── integrity.ts    # Prototype chains, native function checks
+│   │   │   │   └── index.ts        # Combined detection result
+│   │   │   ├── behavior/
+│   │   │   │   ├── mouse.ts        # Mouse telemetry (ring buffer)
+│   │   │   │   ├── keyboard.ts     # Keystroke timing (ring buffer)
+│   │   │   │   ├── scroll.ts       # Scroll tracking (ring buffer)
+│   │   │   │   └── index.ts        # Behavior orchestrator
+│   │   │   └── transport/
+│   │   │       ├── serializer.ts   # Binary serialization (DataView, big-endian)
+│   │   │       ├── crypto.ts       # AES-GCM + RSA-OAEP envelope encryption
+│   │   │       ├── hook.ts         # fetch/XHR interceptor
+│   │   │       └── index.ts
+│   │   └── tests/
+│   ├── server/                     # TypeScript server package (framework-agnostic)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   ├── tsup.config.ts
+│   │   ├── src/
+│   │   │   ├── index.ts            # Public API: createBoltFraud(config)
+│   │   │   ├── model/
+│   │   │   │   └── types.ts        # Token, Decision, Fingerprint, Store interface
+│   │   │   ├── crypto/
+│   │   │   │   ├── decrypt.ts      # AES-GCM decryption + RSA key unwrap
+│   │   │   │   └── keys.ts         # Key management (generate, load, rotate)
+│   │   │   ├── scoring/
+│   │   │   │   ├── engine.ts       # Risk scoring engine (weighted signals)
+│   │   │   │   ├── fingerprint.ts  # Fingerprint consistency checks
+│   │   │   │   ├── automation.ts   # Automation detection scoring
+│   │   │   │   └── behavior.ts     # Behavioral analysis (entropy, timing)
+│   │   │   └── store/
+│   │   │       └── memory.ts       # In-memory store (swap for Redis later)
+│   │   └── tests/
+│   └── adapter-nestjs/             # NestJS integration module
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── tsup.config.ts
+│       ├── src/
+│       │   ├── index.ts            # Re-exports module, guard, decorators
+│       │   ├── bolt-fraud.module.ts # NestJS DynamicModule (forRoot/forRootAsync)
+│       │   ├── bolt-fraud.guard.ts  # CanActivate guard (verifies token)
+│       │   └── bolt-fraud.decorator.ts # @Protected(), @BoltFraudDecision()
+│       └── tests/
 ├── shared/
-│   └── signals.md              # Documentation of all signal types and weights
+│   └── signals.md              # Signal types, weights, thresholds
 ├── deploy/
-│   ├── Dockerfile              # Multi-stage Go build
-│   └── docker-compose.yml      # Server + Redis
+│   └── docker-compose.yml      # Redis for production store
+├── package.json                # Workspace root
 ├── Makefile
-└── README.md
+└── PLAN.md
 ```
 
 ## Key Design Decisions (Learned from Shopee's SFU Analysis)

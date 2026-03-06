@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.env
+keys/
+*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+
+# Build
+*.tsbuildinfo
