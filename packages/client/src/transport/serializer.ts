@@ -62,6 +62,11 @@ export function serialize(payload: TokenPayload): Uint8Array {
     writer.writeStr(lang)
   }
 
+  writer.writeStr(fp.navigator.platform)
+  writer.writeStr(fp.navigator.vendor)
+  // doNotTrack: write empty string if null, otherwise the value
+  writer.writeStr(fp.navigator.doNotTrack ?? '')
+
   // Screen
   writer.writeU16(fp.screen.width)
   writer.writeU16(fp.screen.height)
@@ -70,6 +75,11 @@ export function serialize(payload: TokenPayload): Uint8Array {
   writer.writeU8(fp.screen.colorDepth)
   writer.writeU8(fp.screen.pixelDepth)
   writer.writeU16(Math.round(fp.screen.devicePixelRatio * 100))
+
+  // collectedAt as two u32s (high, low)
+  const collectedAt = Math.round(fp.collectedAt)
+  writer.writeU32(Math.floor(collectedAt / 0x1_0000_0000))
+  writer.writeU32(collectedAt >>> 0)
 
   // ── Detection ──────────────────────────────────────────────────────────────
   const det = payload.detection
@@ -179,6 +189,11 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
     languages.push(reader.readStr())
   }
 
+  const platform = reader.readStr()
+  const vendor = reader.readStr()
+  const doNotTrackRaw = reader.readStr()
+  const doNotTrack = doNotTrackRaw === '' ? null : doNotTrackRaw
+
   const screenWidth = reader.readU16()
   const screenHeight = reader.readU16()
   const screenAvailWidth = reader.readU16()
@@ -186,6 +201,10 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   const colorDepth = reader.readU8()
   const pixelDepth = reader.readU8()
   const devicePixelRatio = reader.readU16() / 100
+
+  const collectedAtHigh = reader.readU32()
+  const collectedAtLow = reader.readU32()
+  const collectedAt = collectedAtHigh * 0x1_0000_0000 + collectedAtLow
 
   // ── Detection ──────────────────────────────────────────────────────────────
   const isAutomated = reader.readU8() === 1
@@ -261,13 +280,13 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
         userAgent,
         language,
         languages,
-        platform: '',
+        platform,
         hardwareConcurrency,
         deviceMemory,
         maxTouchPoints,
         cookieEnabled,
-        doNotTrack: null,
-        vendor: '',
+        doNotTrack,
+        vendor,
         pluginCount,
       },
       screen: {
@@ -279,7 +298,7 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
         pixelDepth,
         devicePixelRatio,
       },
-      collectedAt: timestamp,
+      collectedAt,
     },
     detection: {
       isAutomated,
