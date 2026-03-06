@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Typecheck client and server in parallel (no cross-deps)
+      - name: Typecheck client
+        run: npx tsc --noEmit -p packages/client/tsconfig.json
+
+      - name: Typecheck server
+        run: npx tsc --noEmit -p packages/server/tsconfig.json
+
+      # Adapter imports from @bolt-fraud/server dist, so build server first
+      - name: Build server (adapter dependency)
+        run: npx tsup
+        working-directory: packages/server
+
+      - name: Typecheck NestJS adapter
+        run: npx tsc --noEmit -p packages/adapter-nestjs/tsconfig.json
+
+      - name: Typecheck Express adapter
+        run: npx tsc --noEmit -p packages/adapter-express/tsconfig.json
+
+      # Run tests per workspace
+      - name: Test client
+        run: npm test -w packages/client
+
+      - name: Test server
+        run: npm test -w packages/server
+
+      - name: Test NestJS adapter
+        run: npm test -w packages/adapter-nestjs
+
+      - name: Test Express adapter
+        run: npm test -w packages/adapter-express
+
+      # Full build only on main branch push — PRs just typecheck + test
+      - name: Build all packages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: npm run build

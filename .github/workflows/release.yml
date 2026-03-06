@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump type
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Typecheck all packages
+      - name: Typecheck client
+        run: npx tsc --noEmit -p packages/client/tsconfig.json
+
+      - name: Typecheck server
+        run: npx tsc --noEmit -p packages/server/tsconfig.json
+
+      - name: Build server (adapter dependency)
+        run: npx tsup
+        working-directory: packages/server
+
+      - name: Typecheck NestJS adapter
+        run: npx tsc --noEmit -p packages/adapter-nestjs/tsconfig.json
+
+      - name: Typecheck Express adapter
+        run: npx tsc --noEmit -p packages/adapter-express/tsconfig.json
+
+      # Test all packages
+      - name: Test client
+        run: npm test -w packages/client
+
+      - name: Test server
+        run: npm test -w packages/server
+
+      - name: Test NestJS adapter
+        run: npm test -w packages/adapter-nestjs
+
+      - name: Test Express adapter
+        run: npm test -w packages/adapter-express
+
+      # Build all
+      - name: Build all packages
+        run: npm run build
+
+      # Bump versions in all packages
+      - name: Bump versions
+        run: |
+          NEW_VERSION=$(npm version ${{ inputs.bump }} --no-git-tag-version --workspaces --include-workspace-root | head -1 | sed 's/^v//')
+          echo "NEW_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
+
+      # Verify publishable artifacts
+      - name: Pack client
+        run: npm pack --dry-run
+        working-directory: packages/client
+
+      - name: Pack server
+        run: npm pack --dry-run
+        working-directory: packages/server
+
+      - name: Pack NestJS adapter
+        run: npm pack --dry-run
+        working-directory: packages/adapter-nestjs
+
+      - name: Pack Express adapter
+        run: npm pack --dry-run
+        working-directory: packages/adapter-express
+
+      # Commit version bump and tag
+      - name: Commit and tag
+        run: |
+          git add -A
+          git commit -m "chore: release v${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin HEAD --tags
