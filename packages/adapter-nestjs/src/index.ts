@@ -12,6 +12,8 @@ export { BoltFraudDecision, BoltFraudProtected } from './bolt-fraud.decorator.js
 export type {
   BoltFraudServerConfig,
   Decision,
+  ClientSafeDecision,
   DecisionType,
   BoltFraud,
 } from '@bolt-fraud/server'
+export { toClientSafeDecision } from '@bolt-fraud/server'
