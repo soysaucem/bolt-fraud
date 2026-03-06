@@ -11,6 +11,6 @@
     "lint": "npm run lint --workspaces"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }
