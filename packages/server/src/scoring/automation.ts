@@ -19,6 +19,8 @@ const INSTANT_BLOCK_SIGNALS = new Set([
 const SCORED_SIGNALS: ReadonlyMap<string, number> = new Map([
   ['languages_empty', 10],
   ['connection_rtt_zero', 10],
+  ['stack_trace_headless', 15],
+  ['user_agent_headless', 20],
 ])
 
 /**

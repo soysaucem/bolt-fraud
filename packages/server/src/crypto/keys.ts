@@ -1,4 +1,4 @@
-import { generateKeyPairSync, generateKeyPair as _generateKeyPair } from 'node:crypto'
+import { generateKeyPairSync as _generateKeyPairSync, generateKeyPair as _generateKeyPair, createPrivateKey, type KeyObject } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 export interface KeyPair {
@@ -6,8 +6,8 @@ export interface KeyPair {
   readonly privateKey: string
 }
 
-export function generateKeyPair(): KeyPair {
-  const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+export function generateKeyPairSync(): KeyPair {
+  const { publicKey, privateKey } = _generateKeyPairSync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
@@ -16,7 +16,7 @@ export function generateKeyPair(): KeyPair {
 }
 
 /**
- * Async variant of generateKeyPair. Avoids blocking the event loop
+ * Async variant of generateKeyPairSync. Avoids blocking the event loop
  * during key generation (RSA-2048 can take ~100ms synchronously).
  */
 export function generateKeyPairAsync(): Promise<KeyPair> {
@@ -58,15 +58,18 @@ export function loadKeyFromEnv(envVar: string): string {
 export class KeyManager {
   private _publicKey: string | null = null
   private _privateKey: string | null = null
+  private _privateKeyObject: KeyObject | null = null
 
   loadFromFiles(publicKeyPath: string, privateKeyPath: string): void {
     this._publicKey = loadKeyFromFile(publicKeyPath)
     this._privateKey = loadKeyFromFile(privateKeyPath)
+    this._privateKeyObject = createPrivateKey(this._privateKey)
   }
 
   loadFromStrings(publicKey: string, privateKey: string): void {
     this._publicKey = publicKey
     this._privateKey = privateKey
+    this._privateKeyObject = createPrivateKey(privateKey)
   }
 
   get publicKey(): string {
@@ -77,5 +80,10 @@ export class KeyManager {
   get privateKey(): string {
     if (!this._privateKey) throw new Error('Private key not loaded')
     return this._privateKey
+  }
+
+  get privateKeyObject(): KeyObject {
+    if (!this._privateKeyObject) throw new Error('Private key not loaded')
+    return this._privateKeyObject
   }
 }

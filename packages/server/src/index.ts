@@ -19,7 +19,7 @@ import type {
   Decision,
   Token,
 } from './model/types.js'
-import { RiskEngine } from './scoring/engine.js'
+import { RiskEngine, computeFingerprintHash } from './scoring/engine.js'
 import { decryptToken, decryptTokenDev } from './crypto/decrypt.js'
 import { KeyManager } from './crypto/keys.js'
 import { MemoryStore } from './store/memory.js'
@@ -33,8 +33,8 @@ export type {
   FingerprintStore,
 } from './model/types.js'
 
-export { RiskEngine } from './scoring/engine.js'
-export { KeyManager, generateKeyPair, generateKeyPairAsync } from './crypto/keys.js'
+export { RiskEngine, computeFingerprintHash } from './scoring/engine.js'
+export { KeyManager, generateKeyPairSync, generateKeyPairAsync } from './crypto/keys.js'
 export { MemoryStore } from './store/memory.js'
 export { decryptToken, decryptTokenDev, base64urlDecode } from './crypto/decrypt.js'
 export { computeKeystrokeUniformity, computeMouseEntropy } from './scoring/behavior.js'
@@ -48,6 +48,10 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
   // Validate: both keys must be provided together, or neither
   if ((config.privateKeyPem && !config.publicKeyPem) || (!config.privateKeyPem && config.publicKeyPem)) {
     throw new Error('createBoltFraud: both privateKeyPem and publicKeyPem must be provided together')
+  }
+
+  if (!config.privateKeyPem && typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+    throw new Error('createBoltFraud: privateKeyPem is required in production (NODE_ENV=production)')
   }
 
   const keyManager = new KeyManager()
@@ -67,7 +71,7 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
     async verify(encryptedToken: string, clientIP?: string): Promise<Decision> {
       let token: Token
       try {
-        token = decryptToken(encryptedToken, keyManager.privateKey)
+        token = decryptToken(encryptedToken, keyManager.privateKeyObject)
       } catch (error) {
         return {
           decision: 'block',
@@ -77,13 +81,7 @@ export function createBoltFraud(config: BoltFraudServerConfig = {}): BoltFraud {
         }
       }
 
-      // Compute a stable fingerprint hash — never use empty string as key
-      // to avoid conflating all clients with blocked canvas APIs
-      const fpHash =
-        token.fingerprint.canvas.hash ||
-        token.fingerprint.webgl.hash ||
-        token.fingerprint.audio.hash ||
-        'unknown'
+      const fpHash = computeFingerprintHash(token)
 
       // Save fingerprint for IP tracking
       if (clientIP) {

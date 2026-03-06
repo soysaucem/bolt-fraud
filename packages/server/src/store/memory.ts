@@ -5,7 +5,7 @@ const DEFAULT_TTL_MS = 86_400_000 // 24 hours
 
 interface StoreEntry {
   readonly ips: Set<string>
-  readonly createdAt: number
+  readonly lastSeenAt: number
 }
 
 export interface MemoryStoreOptions {
@@ -23,6 +23,7 @@ export interface MemoryStoreOptions {
  */
 export class MemoryStore implements FingerprintStore {
   private readonly _entries = new Map<string, StoreEntry>()
+  private readonly _seenNonces = new Map<string, number>()
   private readonly _maxEntries: number
   private readonly _ttlMs: number
 
@@ -34,7 +35,20 @@ export class MemoryStore implements FingerprintStore {
   async saveFingerprint(fingerprintHash: string, ip: string): Promise<void> {
     const existing = this._entries.get(fingerprintHash)
     if (existing) {
-      existing.ips.add(ip)
+      if (existing.ips.size < 10_000) {
+        const newEntry: StoreEntry = {
+          ips: new Set([...existing.ips, ip]),
+          lastSeenAt: Date.now(),
+        }
+        this._entries.set(fingerprintHash, newEntry)
+      } else {
+        // Cap exceeded — still update lastSeenAt without adding IP
+        const newEntry: StoreEntry = {
+          ips: existing.ips,
+          lastSeenAt: Date.now(),
+        }
+        this._entries.set(fingerprintHash, newEntry)
+      }
     } else {
       // Evict oldest entry if at capacity
       if (this._entries.size >= this._maxEntries) {
@@ -45,7 +59,7 @@ export class MemoryStore implements FingerprintStore {
       }
       this._entries.set(fingerprintHash, {
         ips: new Set([ip]),
-        createdAt: Date.now(),
+        lastSeenAt: Date.now(),
       })
     }
   }
@@ -54,8 +68,8 @@ export class MemoryStore implements FingerprintStore {
     const entry = this._entries.get(fingerprintHash)
     if (!entry) return 0
 
-    // Evict stale entries
-    if (entry.createdAt + this._ttlMs < Date.now()) {
+    // Evict stale entries (TTL is sliding — based on lastSeenAt)
+    if (entry.lastSeenAt + this._ttlMs < Date.now()) {
       this._entries.delete(fingerprintHash)
       return 0
     }
@@ -63,7 +77,28 @@ export class MemoryStore implements FingerprintStore {
     return entry.ips.size
   }
 
+  async hasSeenNonce(nonce: string): Promise<boolean> {
+    const now = Date.now()
+    // Evict expired nonces
+    for (const [key, expiry] of this._seenNonces) {
+      if (expiry < now) {
+        this._seenNonces.delete(key)
+      }
+    }
+    return this._seenNonces.has(nonce)
+  }
+
+  async saveNonce(nonce: string, ttlMs: number): Promise<void> {
+    this._seenNonces.set(nonce, Date.now() + ttlMs)
+  }
+
+  async close(): Promise<void> {
+    this._entries.clear()
+    this._seenNonces.clear()
+  }
+
   clear(): void {
     this._entries.clear()
+    this._seenNonces.clear()
   }
 }

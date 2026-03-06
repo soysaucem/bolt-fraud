@@ -1,8 +1,8 @@
 import {
-  createPrivateKey,
   privateDecrypt,
   createDecipheriv,
   constants,
+  type KeyObject,
 } from 'node:crypto'
 import { inflateRawSync } from 'node:zlib'
 import type {
@@ -10,13 +10,13 @@ import type {
   Fingerprint,
   DetectionData,
   BehaviorData,
-  MouseEvent,
-  KeyboardEvent,
-  ScrollEvent,
+  BfMouseEvent,
+  BfKeyboardEvent,
+  BfScrollEvent,
 } from '../model/types.js'
 
 const MAX_TOKEN_SIZE = 65_536 // 64 KB
-const MAX_DECOMPRESSED_SIZE = 1_048_576 // 1 MB
+const MAX_DECOMPRESSED_SIZE = 262_144 // 256 KB
 
 /**
  * Decrypt an encrypted token bundle from the client.
@@ -24,7 +24,7 @@ const MAX_DECOMPRESSED_SIZE = 1_048_576 // 1 MB
  */
 export function decryptToken(
   bundle: string,
-  privateKeyPem: string,
+  privateKey: KeyObject,
 ): Token {
   // 1. base64url decode
   const raw = base64urlDecode(bundle)
@@ -50,7 +50,7 @@ export function decryptToken(
   // 3. RSA-OAEP decrypt the wrappedKey → AES session key
   const aesKeyBytes = privateDecrypt(
     {
-      key: createPrivateKey(privateKeyPem),
+      key: privateKey,
       oaepHash: 'sha256',
       padding: constants.RSA_PKCS1_OAEP_PADDING,
     },
@@ -78,7 +78,7 @@ export function decryptToken(
   }
 
   // JSON fallback for development
-  return JSON.parse(plaintext.toString('utf-8')) as Token
+  return validateTokenShape(JSON.parse(plaintext.toString('utf-8')))
 }
 
 /**
@@ -99,7 +99,25 @@ export function decryptTokenDev(base64urlToken: string): Token {
     return deserializeBinary(bytes)
   }
 
-  return JSON.parse(bytes.toString('utf-8')) as Token
+  return validateTokenShape(JSON.parse(bytes.toString('utf-8')))
+}
+
+/**
+ * Runtime validation of a parsed JSON object into a Token shape.
+ * Throws if required fields are missing or of wrong type.
+ */
+function validateTokenShape(raw: unknown): Token {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('validateTokenShape: not an object')
+  }
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.timestamp !== 'number') throw new Error('validateTokenShape: missing timestamp')
+  if (typeof obj.nonce !== 'string') throw new Error('validateTokenShape: missing nonce')
+  if (typeof obj.sdkVersion !== 'string') throw new Error('validateTokenShape: missing sdkVersion')
+  if (typeof obj.fingerprint !== 'object' || obj.fingerprint === null) throw new Error('validateTokenShape: missing fingerprint')
+  if (typeof obj.detection !== 'object' || obj.detection === null) throw new Error('validateTokenShape: missing detection')
+  if (typeof obj.behavior !== 'object' || obj.behavior === null) throw new Error('validateTokenShape: missing behavior')
+  return obj as unknown as Token
 }
 
 /**
@@ -200,24 +218,27 @@ function tryDecompress(data: Buffer): Buffer {
  *   u32    totalMouseEvents
  *   u32    totalKeyboardEvents
  *   u32    totalScrollEvents
- *   u32    snapshotAt          (single u32, not u64)
+ *   u64    snapshotAt (as two u32s, high then low)
  */
 function deserializeBinary(bytes: Buffer): Token {
   let pos = 0
 
   function readU8(): number {
+    if (pos + 1 > bytes.length) throw new Error('deserializeBinary: unexpected end of buffer at offset ' + pos)
     const val = bytes.readUInt8(pos)
     pos += 1
     return val
   }
 
   function readU16(): number {
+    if (pos + 2 > bytes.length) throw new Error('deserializeBinary: unexpected end of buffer at offset ' + pos)
     const val = bytes.readUInt16BE(pos)
     pos += 2
     return val
   }
 
   function readU32(): number {
+    if (pos + 4 > bytes.length) throw new Error('deserializeBinary: unexpected end of buffer at offset ' + pos)
     const val = bytes.readUInt32BE(pos)
     pos += 4
     return val
@@ -225,6 +246,7 @@ function deserializeBinary(bytes: Buffer): Token {
 
   function readStr(): string {
     const len = readU16()
+    if (pos + len > bytes.length) throw new Error('deserializeBinary: string exceeds buffer at offset ' + pos)
     const str = bytes.toString('utf-8', pos, pos + len)
     pos += len
     return str
@@ -348,7 +370,7 @@ function deserializeBinary(bytes: Buffer): Token {
 
   // BehaviorData
   const mouseCount = readU16()
-  const mouse: MouseEvent[] = []
+  const mouse: BfMouseEvent[] = []
   for (let i = 0; i < mouseCount; i++) {
     const type = readStr()
     const x = readU16()
@@ -359,7 +381,7 @@ function deserializeBinary(bytes: Buffer): Token {
   }
 
   const keyboardCount = readU16()
-  const keyboard: KeyboardEvent[] = []
+  const keyboard: BfKeyboardEvent[] = []
   for (let i = 0; i < keyboardCount; i++) {
     const type = readStr()
     const code = readStr()
@@ -368,7 +390,7 @@ function deserializeBinary(bytes: Buffer): Token {
   }
 
   const scrollCount = readU16()
-  const scroll: ScrollEvent[] = []
+  const scroll: BfScrollEvent[] = []
   for (let i = 0; i < scrollCount; i++) {
     const x = readU16()
     const y = readU16()
@@ -379,7 +401,9 @@ function deserializeBinary(bytes: Buffer): Token {
   const totalMouseEvents = readU32()
   const totalKeyboardEvents = readU32()
   const totalScrollEvents = readU32()
-  const snapshotAt = readU32()  // single u32, not u64
+  const snapHigh = readU32()
+  const snapLow = readU32()
+  const snapshotAt = snapHigh * 0x1_0000_0000 + snapLow
 
   const behavior: BehaviorData = {
     mouse,

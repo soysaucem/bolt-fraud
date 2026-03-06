@@ -65,7 +65,7 @@ export interface IntegrityViolation {
   readonly detail?: string
 }
 
-export interface MouseEvent {
+export interface BfMouseEvent {
   readonly type: string
   readonly x: number
   readonly y: number
@@ -73,22 +73,22 @@ export interface MouseEvent {
   readonly buttons: number
 }
 
-export interface KeyboardEvent {
+export interface BfKeyboardEvent {
   readonly type: string
   readonly code: string
   readonly t: number
 }
 
-export interface ScrollEvent {
+export interface BfScrollEvent {
   readonly x: number
   readonly y: number
   readonly t: number
 }
 
 export interface BehaviorData {
-  readonly mouse: readonly MouseEvent[]
-  readonly keyboard: readonly KeyboardEvent[]
-  readonly scroll: readonly ScrollEvent[]
+  readonly mouse: readonly BfMouseEvent[]
+  readonly keyboard: readonly BfKeyboardEvent[]
+  readonly scroll: readonly BfScrollEvent[]
   readonly totalMouseEvents: number
   readonly totalKeyboardEvents: number
   readonly totalScrollEvents: number
@@ -121,4 +121,7 @@ export interface BoltFraudServerConfig {
 export interface FingerprintStore {
   saveFingerprint(fingerprintHash: string, ip: string): Promise<void>
   getIPCount(fingerprintHash: string): Promise<number>
+  hasSeenNonce?(nonce: string): Promise<boolean>
+  saveNonce?(nonce: string, ttlMs: number): Promise<void>
+  close?(): Promise<void>
 }
