@@ -445,6 +445,188 @@ describe('serialize / deserialize round-trip', () => {
   })
 })
 
+// ─── binary protocol v2 fields: platform, vendor, doNotTrack, collectedAt ─────
+
+describe('binary protocol v2 fields', () => {
+  it('round-trips navigator.platform and navigator.vendor with actual values', () => {
+    // Arrange
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({
+        navigator: {
+          userAgent: 'Mozilla/5.0',
+          language: 'en-US',
+          languages: ['en-US'],
+          platform: 'Win32',
+          hardwareConcurrency: 4,
+          deviceMemory: 4,
+          maxTouchPoints: 0,
+          cookieEnabled: true,
+          doNotTrack: '1',
+          vendor: 'Google Inc.',
+          pluginCount: 0,
+        },
+      }),
+    })
+
+    // Act
+    const restored = deserialize(serialize(payload))
+
+    // Assert
+    expect(restored.fingerprint.navigator.platform).toBe('Win32')
+    expect(restored.fingerprint.navigator.vendor).toBe('Google Inc.')
+    expect(restored.fingerprint.navigator.doNotTrack).toBe('1')
+  })
+
+  it('round-trips navigator.doNotTrack = null — serializes as empty string, deserializes back to null', () => {
+    // Arrange
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({
+        navigator: {
+          userAgent: 'Mozilla/5.0',
+          language: 'en-US',
+          languages: ['en-US'],
+          platform: 'MacIntel',
+          hardwareConcurrency: 8,
+          deviceMemory: 8,
+          maxTouchPoints: 0,
+          cookieEnabled: true,
+          doNotTrack: null,
+          vendor: 'Apple Computer, Inc.',
+          pluginCount: 3,
+        },
+      }),
+    })
+
+    // Act
+    const bytes = serialize(payload)
+    const restored = deserialize(bytes)
+
+    // Assert: null survives the empty-string wire encoding
+    expect(restored.fingerprint.navigator.doNotTrack).toBeNull()
+  })
+
+  it('round-trips navigator.doNotTrack = "0" (unset, as opposed to "1" = set)', () => {
+    // Arrange
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({
+        navigator: {
+          userAgent: 'Mozilla/5.0',
+          language: 'en-US',
+          languages: ['en-US'],
+          platform: 'Linux x86_64',
+          hardwareConcurrency: 2,
+          deviceMemory: null,
+          maxTouchPoints: 0,
+          cookieEnabled: false,
+          doNotTrack: '0',
+          vendor: '',
+          pluginCount: 0,
+        },
+      }),
+    })
+
+    // Act
+    const restored = deserialize(serialize(payload))
+
+    // Assert
+    expect(restored.fingerprint.navigator.doNotTrack).toBe('0')
+    expect(restored.fingerprint.navigator.platform).toBe('Linux x86_64')
+    expect(restored.fingerprint.navigator.vendor).toBe('')
+  })
+
+  it('round-trips fingerprint.collectedAt — exact timestamp is preserved', () => {
+    // Arrange: use a fixed timestamp well within u32 range (low 32-bit portion is sufficient)
+    const collectedAt = 1_700_000_000_000
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({ collectedAt }),
+    })
+
+    // Act
+    const restored = deserialize(serialize(payload))
+
+    // Assert: collectedAt survives the high/low u32 split intact
+    expect(restored.fingerprint.collectedAt).toBe(collectedAt)
+  })
+
+  it('round-trips fingerprint.collectedAt as a large Date.now()-style timestamp (u64 high/low split)', () => {
+    // Arrange: pick a timestamp whose high 32 bits are non-zero to exercise the u64 path.
+    // 0x200000000 = 8_589_934_592 — high word = 2, low word = 0
+    const collectedAt = 0x2_0000_0000
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({ collectedAt }),
+    })
+
+    // Act
+    const bytes = serialize(payload)
+    const restored = deserialize(bytes)
+
+    // Assert
+    expect(restored.fingerprint.collectedAt).toBe(collectedAt)
+  })
+
+  it('round-trips a realistic collectedAt value matching current epoch milliseconds', () => {
+    // Arrange: 2024-01-01T00:00:00.000Z in ms
+    const collectedAt = 1_704_067_200_000
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({ collectedAt }),
+    })
+
+    // Act
+    const restored = deserialize(serialize(payload))
+
+    // Assert: high word = Math.floor(1_704_067_200_000 / 2^32) = 396, which is non-zero
+    expect(restored.fingerprint.collectedAt).toBe(collectedAt)
+  })
+
+  it('round-trips all v2 navigator fields together without clobbering adjacent fields', () => {
+    // Arrange: ensure platform/vendor/doNotTrack are encoded in the right wire position
+    // by verifying surrounding fields (screen, collectedAt) are also correct after decode
+    const collectedAt = 1_700_000_500_000
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({
+        navigator: {
+          userAgent: 'TestAgent/1.0',
+          language: 'fr-FR',
+          languages: ['fr-FR', 'fr'],
+          platform: 'iPhone',
+          hardwareConcurrency: 6,
+          deviceMemory: 2,
+          maxTouchPoints: 5,
+          cookieEnabled: true,
+          doNotTrack: '1',
+          vendor: 'Apple Computer, Inc.',
+          pluginCount: 0,
+        },
+        screen: {
+          width: 390,
+          height: 844,
+          availWidth: 390,
+          availHeight: 844,
+          colorDepth: 32,
+          pixelDepth: 32,
+          devicePixelRatio: 3,
+        },
+        collectedAt,
+      }),
+    })
+
+    // Act
+    const restored = deserialize(serialize(payload))
+    const nav = restored.fingerprint.navigator
+
+    // Assert v2 navigator fields
+    expect(nav.platform).toBe('iPhone')
+    expect(nav.vendor).toBe('Apple Computer, Inc.')
+    expect(nav.doNotTrack).toBe('1')
+
+    // Assert surrounding fields are not corrupted by the new fields
+    expect(restored.fingerprint.screen.width).toBe(390)
+    expect(restored.fingerprint.screen.height).toBe(844)
+    expect(restored.fingerprint.screen.devicePixelRatio).toBeCloseTo(3, 1)
+    expect(restored.fingerprint.collectedAt).toBe(collectedAt)
+  })
+})
+
 // ─── deserialize version validation ───────────────────────────────────────────
 
 describe('deserialize version validation', () => {
