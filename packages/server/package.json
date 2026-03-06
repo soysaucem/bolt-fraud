@@ -1,6 +1,6 @@
 {
   "name": "@bolt-fraud/server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Server-side anti-bot token verification and risk scoring",
   "type": "module",
   "main": "./dist/index.cjs",
