@@ -79,12 +79,10 @@ export async function getToken(timeoutMs = 5000): Promise<EncryptedToken> {
 async function _collectAndBuildToken(): Promise<EncryptedToken> {
   const config = _config!
 
-  console.log('[bolt-fraud] _collectAndBuildToken: starting fingerprint collection')
   const [fingerprint, detection] = await Promise.all([
     collectFingerprint(),
     Promise.resolve(_cachedDetection ?? runDetection()),
   ])
-  console.log('[bolt-fraud] _collectAndBuildToken: fingerprint done, canvas:', fingerprint.canvas.hash?.length, 'webgl:', fingerprint.webgl.hash?.length, 'audio:', fingerprint.audio.hash?.length)
 
   const behavior = snapshotBehavior()
 
@@ -103,9 +101,7 @@ async function _collectAndBuildToken(): Promise<EncryptedToken> {
     sdkVersion: SDK_VERSION,
   }
 
-  console.log('[bolt-fraud] _collectAndBuildToken: calling buildToken...')
   const token = await buildToken(payload, config)
-  console.log('[bolt-fraud] _collectAndBuildToken: buildToken done, token length:', token.token?.length)
 
   config.onTokenReady?.(token)
 
