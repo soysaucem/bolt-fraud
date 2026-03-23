@@ -5,6 +5,7 @@ let _originalXHROpen: typeof XMLHttpRequest.prototype.open | null = null
 let _originalXHRSend: typeof XMLHttpRequest.prototype.send | null = null
 let _fetchInstalled = false
 let _xhrInstalled = false
+let _gettingToken = false // Re-entrancy guard: prevent infinite recursion if getToken uses fetch
 
 export function installFetchHook(config: BoltFraudConfig): void {
   if (_fetchInstalled) return
@@ -14,14 +15,26 @@ export function installFetchHook(config: BoltFraudConfig): void {
     input: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> {
+    // Skip token injection if we're already inside a getToken() call
+    // to prevent infinite recursion (getToken → fetch → getToken → ...)
+    if (_gettingToken) {
+      return _originalFetch!(input, init)
+    }
     const url = input instanceof Request ? input.url : String(input)
     if (shouldProtect(url, config)) {
-      // Lazy import to avoid circular deps
-      const { getToken } = await import('../index.js')
-      const token = await getToken()
-      const headers = new Headers(init?.headers)
-      headers.set(config.tokenHeader ?? 'X-Client-Data', token.token)
-      return _originalFetch!(input, { ...init, headers })
+      _gettingToken = true
+      try {
+        const { getToken } = await import('../index.js')
+        const token = await getToken()
+        const headers = new Headers(init?.headers)
+        headers.set(config.tokenHeader ?? 'X-Client-Data', token.token)
+        return _originalFetch!(input, { ...init, headers })
+      } catch {
+        // Token generation failed — send without token
+        return _originalFetch!(input, init)
+      } finally {
+        _gettingToken = false
+      }
     }
     return _originalFetch!(input, init)
   }

@@ -34,7 +34,15 @@ export async function getAudioFingerprint(): Promise<AudioFingerprint> {
     oscillator.start(0)
     oscillator.stop(duration)
 
-    const audioBuffer = await ctx.startRendering()
+    // startRendering() can hang forever during early page load (before user gesture,
+    // during React hydration, in background tabs). Race against a timeout to prevent
+    // blocking the entire getToken() call chain.
+    const audioBuffer = await Promise.race([
+      ctx.startRendering(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('audio_fingerprint_timeout')), 3000),
+      ),
+    ])
     const channelData = audioBuffer.getChannelData(0)
 
     // Take a stable slice of samples (4500 to 5000)

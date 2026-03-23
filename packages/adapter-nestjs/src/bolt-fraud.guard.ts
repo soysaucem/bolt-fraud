@@ -7,7 +7,7 @@ import {
   HttpStatus,
 } from '@nestjs/common'
 import type { BoltFraud, Decision } from '@soysaucem/bolt-fraud-server'
-import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER } from './bolt-fraud.module.js'
+import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER } from './tokens.js'
 
 const MAX_TOKEN_LENGTH = 65_536 // 64KB base64 encoded
 
@@ -25,10 +25,16 @@ export class BoltFraudGuard implements CanActivate {
     const token = request.headers[this.tokenHeader]
 
     if (!token || typeof token !== 'string') {
-      throw new HttpException(
-        { decision: 'block', reason: 'missing_token' },
-        HttpStatus.FORBIDDEN,
-      )
+      // Allow request through — missing token is handled by downstream fraud scoring
+      // (adds risk points, not an outright block). Blocking here would break clients
+      // that haven't deployed the SDK yet or have it disabled.
+      request.boltFraudDecision = {
+        decision: 'allow' as const,
+        score: 0,
+        instantBlock: false,
+        reasons: ['missing_token'],
+      }
+      return true
     }
 
     if (token.length > MAX_TOKEN_LENGTH) {

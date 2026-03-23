@@ -66,8 +66,17 @@ export function init(config: BoltFraudConfig): Promise<void> {
   return _initPromise
 }
 
-export async function getToken(): Promise<EncryptedToken> {
+export async function getToken(timeoutMs = 5000): Promise<EncryptedToken> {
   assertInitialized()
+  return Promise.race([
+    _collectAndBuildToken(),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('[bolt-fraud] getToken() timed out')), timeoutMs),
+    ),
+  ])
+}
+
+async function _collectAndBuildToken(): Promise<EncryptedToken> {
   const config = _config!
 
   // Use cached detection result (collected before hooks were installed) to avoid
@@ -122,6 +131,11 @@ export async function destroy(): Promise<void> {
   _config = null
   _initialized = false
   _cachedDetection = null
+}
+
+/** Returns true if init() has been called and completed */
+export function isReady(): boolean {
+  return _initialized && _config !== null && _initPromise === null
 }
 
 function assertInitialized(): void {

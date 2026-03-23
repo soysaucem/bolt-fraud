@@ -1,10 +1,7 @@
 import { Module, type DynamicModule, type Provider } from '@nestjs/common'
 import { createBoltFraud, type BoltFraudServerConfig, type BoltFraud } from '@soysaucem/bolt-fraud-server'
 import { BoltFraudGuard } from './bolt-fraud.guard.js'
-
-export const BOLT_FRAUD_INSTANCE = 'BOLT_FRAUD_INSTANCE'
-export const BOLT_FRAUD_OPTIONS = 'BOLT_FRAUD_OPTIONS'
-export const BOLT_FRAUD_TOKEN_HEADER = 'BOLT_FRAUD_TOKEN_HEADER'
+import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_OPTIONS, BOLT_FRAUD_TOKEN_HEADER } from './tokens.js'
 
 export interface BoltFraudModuleConfig extends BoltFraudServerConfig {
   readonly tokenHeader?: string

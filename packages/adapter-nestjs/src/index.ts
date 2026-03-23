@@ -1,10 +1,5 @@
-export {
-  BoltFraudModule,
-  BOLT_FRAUD_INSTANCE,
-  BOLT_FRAUD_OPTIONS,
-  BOLT_FRAUD_TOKEN_HEADER,
-  type BoltFraudModuleConfig,
-} from './bolt-fraud.module.js'
+export { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_OPTIONS, BOLT_FRAUD_TOKEN_HEADER } from './tokens.js'
+export { BoltFraudModule, type BoltFraudModuleConfig } from './bolt-fraud.module.js'
 export { BoltFraudGuard } from './bolt-fraud.guard.js'
 export { BoltFraudDecision, BoltFraudProtected } from './bolt-fraud.decorator.js'
 
