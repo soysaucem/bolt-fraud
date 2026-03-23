@@ -83,10 +83,11 @@ export async function decrypt(
 }
 
 export async function importPublicKey(keyPemOrBase64: string): Promise<CryptoKey> {
-  // Strip PEM headers and whitespace
+  // Strip PEM headers, whitespace, and literal \n from env vars
   const b64 = keyPemOrBase64
     .replace(/-----BEGIN PUBLIC KEY-----/g, '')
     .replace(/-----END PUBLIC KEY-----/g, '')
+    .replace(/\\n/g, '')   // literal \n from env vars (Next.js, dotenv)
     .replace(/\s/g, '')
 
   const keyData = base64ToArrayBuffer(b64)
@@ -101,12 +102,13 @@ export async function importPublicKey(keyPemOrBase64: string): Promise<CryptoKey
 }
 
 export async function importPrivateKey(keyPemOrBase64: string): Promise<CryptoKey> {
-  // Strip PEM headers and whitespace
+  // Strip PEM headers, whitespace, and literal \n from env vars
   const b64 = keyPemOrBase64
     .replace(/-----BEGIN PRIVATE KEY-----/g, '')
     .replace(/-----END PRIVATE KEY-----/g, '')
     .replace(/-----BEGIN RSA PRIVATE KEY-----/g, '')
     .replace(/-----END RSA PRIVATE KEY-----/g, '')
+    .replace(/\\n/g, '')   // literal \n from env vars
     .replace(/\s/g, '')
 
   const keyData = base64ToArrayBuffer(b64)
