@@ -133,7 +133,7 @@ describe('scoreAutomation', () => {
       expect(result.reasons).toContain('instant_block:native_function_toString_overridden')
     })
 
-    it('triggers instant block when window_event_target_chain_broken violation is present', () => {
+    it('scores window_event_target_chain_broken as 15 points instead of instant block', () => {
       const detection = createMockDetection({
         isAutomated: false,
         integrity: {
@@ -144,11 +144,12 @@ describe('scoreAutomation', () => {
 
       const result = scoreAutomation(detection)
 
-      expect(result.instantBlock).toBe(true)
-      expect(result.reasons).toContain('instant_block:window_event_target_chain_broken')
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(15)
+      expect(result.reasons).toContain('window_event_target_chain_broken')
     })
 
-    it('triggers instant block when document_node_chain_broken violation is present', () => {
+    it('scores document_node_chain_broken as 15 points instead of instant block', () => {
       const detection = createMockDetection({
         isAutomated: false,
         integrity: {
@@ -159,8 +160,9 @@ describe('scoreAutomation', () => {
 
       const result = scoreAutomation(detection)
 
-      expect(result.instantBlock).toBe(true)
-      expect(result.reasons).toContain('instant_block:document_node_chain_broken')
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(15)
+      expect(result.reasons).toContain('document_node_chain_broken')
     })
 
     it('does not trigger instant block for non-critical violations like fetch_native_overridden', () => {
