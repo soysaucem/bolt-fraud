@@ -22,10 +22,9 @@ describe('BoltFraudGuard', () => {
     const request: MockRequest = { headers: {} }
     const ctx = createMockExecutionContext(request)
 
-    await expect(guard.canActivate(ctx)).rejects.toThrow(HttpException)
-
     try {
       await guard.canActivate(ctx)
+      expect.fail('should have thrown')
     } catch (e) {
       expect(e).toBeInstanceOf(HttpException)
       expect((e as HttpException).getStatus()).toBe(HttpStatus.FORBIDDEN)

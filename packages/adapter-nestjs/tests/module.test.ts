@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { BoltFraudModule, BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_OPTIONS } from '../src/bolt-fraud.module.js'
+import { BoltFraudModule } from '../src/bolt-fraud.module.js'
+import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_OPTIONS } from '../src/tokens.js'
 import { BoltFraudGuard } from '../src/bolt-fraud.guard.js'
 
 describe('BoltFraudModule', () => {

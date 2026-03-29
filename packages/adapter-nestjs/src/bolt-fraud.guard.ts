@@ -25,16 +25,10 @@ export class BoltFraudGuard implements CanActivate {
     const token = request.headers[this.tokenHeader]
 
     if (!token || typeof token !== 'string') {
-      // Allow request through — missing token is handled by downstream fraud scoring
-      // (adds risk points, not an outright block). Blocking here would break clients
-      // that haven't deployed the SDK yet or have it disabled.
-      request.boltFraudDecision = {
-        decision: 'allow' as const,
-        score: 0,
-        instantBlock: false,
-        reasons: ['missing_token'],
-      }
-      return true
+      throw new HttpException(
+        { decision: 'block', reason: 'missing_token' },
+        HttpStatus.FORBIDDEN,
+      )
     }
 
     if (token.length > MAX_TOKEN_LENGTH) {
