@@ -24,6 +24,17 @@ const SCORED_SIGNALS: ReadonlyMap<string, number> = new Map([
 ])
 
 /**
+ * Integrity violations that are scored rather than instant-blocked.
+ * These prototype chain checks have high false-positive rates from legitimate
+ * browser extensions (ad blockers, privacy tools, React DevTools) that patch
+ * EventTarget or Node prototypes.
+ */
+const SCORED_INTEGRITY_VIOLATIONS: ReadonlyMap<string, number> = new Map([
+  ['window_event_target_chain_broken', 15],
+  ['document_node_chain_broken', 15],
+])
+
+/**
  * Score automation detection signals.
  * Returns score, whether to instant-block, and the reasons array.
  * Does NOT mutate any external state.
@@ -53,16 +64,18 @@ export function scoreAutomation(
     }
   }
 
-  // Check integrity violations for instant-block
+  // Check integrity violations
   if (!detection.integrity.isValid) {
     for (const violation of detection.integrity.violations) {
-      if (
-        violation.name === 'native_function_toString_overridden' ||
-        violation.name === 'window_event_target_chain_broken' ||
-        violation.name === 'document_node_chain_broken'
-      ) {
+      if (violation.name === 'native_function_toString_overridden') {
         instantBlock = true
         reasons.push(`instant_block:${violation.name}`)
+      } else {
+        const contribution = SCORED_INTEGRITY_VIOLATIONS.get(violation.name)
+        if (contribution !== undefined) {
+          score += contribution
+          reasons.push(violation.name)
+        }
       }
     }
   }
