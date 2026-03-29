@@ -17,28 +17,31 @@ function createGuard(verifyResult = createAllowDecision(), tokenHeader = 'x-clie
 }
 
 describe('BoltFraudGuard', () => {
-  it('throws 403 when no token header is present', async () => {
+  it('allows request and sets missing_token decision when no token header is present', async () => {
     const { guard } = createGuard()
     const request: MockRequest = { headers: {} }
     const ctx = createMockExecutionContext(request)
 
-    try {
-      await guard.canActivate(ctx)
-      expect.fail('should have thrown')
-    } catch (e) {
-      expect(e).toBeInstanceOf(HttpException)
-      expect((e as HttpException).getStatus()).toBe(HttpStatus.FORBIDDEN)
-      const response = (e as HttpException).getResponse() as Record<string, unknown>
-      expect(response.reason).toBe('missing_token')
-    }
+    const result = await guard.canActivate(ctx)
+
+    expect(result).toBe(true)
+    expect(request.boltFraudDecision).toEqual({
+      decision: 'allow',
+      score: 0,
+      instantBlock: false,
+      reasons: ['missing_token'],
+    })
   })
 
-  it('throws 403 when token header is empty string', async () => {
+  it('allows request and sets missing_token decision when token header is empty string', async () => {
     const { guard } = createGuard()
     const request: MockRequest = { headers: { 'x-client-data': '' } }
     const ctx = createMockExecutionContext(request)
 
-    await expect(guard.canActivate(ctx)).rejects.toThrow(HttpException)
+    const result = await guard.canActivate(ctx)
+
+    expect(result).toBe(true)
+    expect(request.boltFraudDecision?.reasons).toContain('missing_token')
   })
 
   it('calls verify with token and client IP', async () => {
@@ -166,7 +169,7 @@ describe('BoltFraudGuard', () => {
     expect(verifySpy).toHaveBeenCalledWith('my-custom-token-value', '1.2.3.4')
   })
 
-  it('throws 403 when custom header is missing', async () => {
+  it('allows request with missing_token when custom header is missing', async () => {
     // Arrange
     const guard = new BoltFraudGuard(createMockBoltFraud() as any, 'x-custom-token')
     const request: MockRequest = {
@@ -174,16 +177,12 @@ describe('BoltFraudGuard', () => {
     }
     const ctx = createMockExecutionContext(request)
 
-    // Act & Assert
-    try {
-      await guard.canActivate(ctx)
-      expect.fail('should have thrown')
-    } catch (e) {
-      expect(e).toBeInstanceOf(HttpException)
-      expect((e as HttpException).getStatus()).toBe(HttpStatus.FORBIDDEN)
-      const response = (e as HttpException).getResponse() as Record<string, unknown>
-      expect(response.reason).toBe('missing_token')
-    }
+    // Act
+    const result = await guard.canActivate(ctx)
+
+    // Assert
+    expect(result).toBe(true)
+    expect(request.boltFraudDecision?.reasons).toContain('missing_token')
   })
 
   it('throws 400 BAD_REQUEST when token exceeds 65,536 characters', async () => {

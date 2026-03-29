@@ -25,10 +25,13 @@ export class BoltFraudGuard implements CanActivate {
     const token = request.headers[this.tokenHeader]
 
     if (!token || typeof token !== 'string') {
-      throw new HttpException(
-        { decision: 'block', reason: 'missing_token' },
-        HttpStatus.FORBIDDEN,
-      )
+      request.boltFraudDecision = {
+        decision: 'allow' as const,
+        score: 0,
+        instantBlock: false,
+        reasons: ['missing_token'],
+      }
+      return true
     }
 
     if (token.length > MAX_TOKEN_LENGTH) {
