@@ -40,7 +40,7 @@ export async function getAudioFingerprint(): Promise<AudioFingerprint> {
     const audioBuffer = await Promise.race([
       ctx.startRendering(),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('audio_fingerprint_timeout')), 3000),
+        setTimeout(() => reject(new Error('audio_fingerprint_timeout')), 1000),
       ),
     ])
     const channelData = audioBuffer.getChannelData(0)
