@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import { deflateRawSync } from 'node:zlib'
 import { decryptTokenDev } from '../src/index.js'
+import { createMockToken } from './helpers.js'
 
 // ─── BinaryWriter (mirrors packages/client/src/transport/serializer.ts) ──────
 
@@ -108,6 +109,13 @@ function buildBinaryToken(overrides?: {
   totalKeyboardEvents?: number
   totalScrollEvents?: number
   snapshotAt?: number
+  /** When defined, appended as the optional trailing timezone field (clients >= 0.4.0). */
+  timezone?: string
+  /** Raw bytes appended after everything else (forward-compat check). */
+  trailing?: Uint8Array
+  extensions?: string[]
+  mouseEventCount?: number
+  keyboardCode?: string
 }): Uint8Array {
   const w = new BinaryWriter()
   const now = overrides?.timestamp ?? Date.now()
@@ -134,8 +142,9 @@ function buildBinaryToken(overrides?: {
   w.writeStr('WebGL 2.0')
   w.writeStr('WebGL GLSL ES 3.00')
   // extensions array: 1 entry
-  w.writeU16(1)
-  w.writeStr('OES_texture_float')
+  const extensions = overrides?.extensions ?? ['OES_texture_float']
+  w.writeU16(extensions.length)
+  for (const e of extensions) w.writeStr(e)
 
   // Navigator
   w.writeStr(overrides?.userAgent ?? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
@@ -179,17 +188,20 @@ function buildBinaryToken(overrides?: {
 
   // BehaviorData
   // mouse events: 1 entry (type, x, y, t, buttons)
-  w.writeU16(1)
-  w.writeStr('move')
-  w.writeU16(100)
-  w.writeU16(200)
-  w.writeU32(1000)
-  w.writeU8(0)
+  const mouseEventCount = overrides?.mouseEventCount ?? 1
+  w.writeU16(mouseEventCount)
+  for (let i = 0; i < mouseEventCount; i++) {
+    w.writeStr('move')
+    w.writeU16(100)
+    w.writeU16(200)
+    w.writeU32(1000)
+    w.writeU8(0)
+  }
 
   // keyboard events: 1 entry (type, code, t)
   w.writeU16(1)
   w.writeStr('keydown')
-  w.writeStr('KeyA')
+  w.writeStr(overrides?.keyboardCode ?? 'KeyA')
   w.writeU32(2000)
 
   // scroll events: none
@@ -203,7 +215,14 @@ function buildBinaryToken(overrides?: {
   w.writeU32(Math.floor(snapshotAtVal / 0x100000000))
   w.writeU32(snapshotAtVal >>> 0)
 
-  return w.finish()
+  if (overrides?.timezone !== undefined) w.writeStr(overrides.timezone)
+
+  const body = w.finish()
+  if (overrides?.trailing === undefined) return body
+  const out = new Uint8Array(body.length + overrides.trailing.length)
+  out.set(body)
+  out.set(overrides.trailing, body.length)
+  return out
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -455,23 +474,91 @@ describe('decryptTokenDev token size limit', () => {
   })
 })
 
-describe('decryptTokenDev decompression bomb protection', () => {
-  it('throws when decompressed data exceeds 1MB', () => {
-    // Arrange: create a payload that compresses to <64KB but decompresses to >1MB
-    // A long run of repeated bytes compresses extremely well (e.g. 1.5MB of zeros)
-    const largeData = Buffer.alloc(1_100_000, 0x00) // 1.1MB of zeros
-    const compressed = deflateRawSync(largeData)
+describe('decryptTokenDev compression', () => {
+  it('rejects a deflate-compressed token (compression is no longer supported)', () => {
+    const compressed = deflateRawSync(buildBinaryToken())
+    expect(() => decryptTokenDev(base64urlEncode(compressed))).toThrow()
+  })
+})
 
-    // Sanity: the compressed form should be well within the 65536 token size limit
-    expect(compressed.length).toBeLessThan(65_536)
+describe('trailing timezone', () => {
+  it('decodes the optional trailing timezone', () => {
+    const token = decryptTokenDev(base64urlEncode(buildBinaryToken({ timezone: 'Asia/Ho_Chi_Minh' })))
+    expect(token.fingerprint.timezone).toBe('Asia/Ho_Chi_Minh')
+  })
 
-    const encoded = compressed
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '')
+  it("yields '' when the buffer ends right after snapshotAt (clients < 0.4.0)", () => {
+    const token = decryptTokenDev(base64urlEncode(buildBinaryToken()))
+    expect(token.fingerprint.timezone).toBe('')
+  })
 
-    // Act + Assert: tryDecompress should detect the size violation and throw
-    expect(() => decryptTokenDev(encoded)).toThrow(/decompressed size/)
+  it('ignores bytes after the timezone (forward compatibility)', () => {
+    const token = decryptTokenDev(
+      base64urlEncode(buildBinaryToken({ timezone: 'UTC', trailing: new Uint8Array([9, 9, 9, 9, 9]) })),
+    )
+    expect(token.fingerprint.timezone).toBe('UTC')
+  })
+
+  it('still reads the retired audio and keyboard code slots', () => {
+    const token = decryptTokenDev(base64urlEncode(buildBinaryToken({ audioHash: 'legacy-audio', keyboardCode: 'KeyZ' })))
+    expect(token.fingerprint.audio.hash).toBe('legacy-audio')
+    expect(token.behavior.keyboard[0]?.code).toBe('KeyZ')
+  })
+})
+
+describe('field caps', () => {
+  it('rejects a 60,000-byte nonce', () => {
+    const encoded = base64urlEncode(buildBinaryToken({ nonce: 'n'.repeat(60_000) }))
+    expect(() => decryptTokenDev(encoded)).toThrow(/field nonce exceeds 64/)
+  })
+
+  it('rejects an oversized user agent', () => {
+    const encoded = base64urlEncode(buildBinaryToken({ userAgent: 'u'.repeat(513) }))
+    expect(() => decryptTokenDev(encoded)).toThrow(/field navigator.userAgent exceeds 512/)
+  })
+
+  it('rejects an oversized timezone', () => {
+    const encoded = base64urlEncode(buildBinaryToken({ timezone: 'z'.repeat(65) }))
+    expect(() => decryptTokenDev(encoded)).toThrow(/field timezone exceeds 64/)
+  })
+
+  it('rejects an oversized keyboard code', () => {
+    const encoded = base64urlEncode(buildBinaryToken({ keyboardCode: 'c'.repeat(33) }))
+    expect(() => decryptTokenDev(encoded)).toThrow(/field keyboard.code exceeds 32/)
+  })
+
+  it('rejects more than 64 webgl extensions', () => {
+    const extensions = Array.from({ length: 65 }, (_, i) => `EXT_${i}`)
+    const encoded = base64urlEncode(buildBinaryToken({ extensions }))
+    expect(() => decryptTokenDev(encoded)).toThrow(/field webgl.extensions exceeds 64/)
+  })
+
+  it('rejects more than 512 mouse events', () => {
+    const encoded = base64urlEncode(buildBinaryToken({ mouseEventCount: 513 }))
+    expect(() => decryptTokenDev(encoded)).toThrow(/field behavior.mouse exceeds 512/)
+  })
+
+  it('accepts values exactly at the caps', () => {
+    const encoded = base64urlEncode(
+      buildBinaryToken({ nonce: 'n'.repeat(64), extensions: Array.from({ length: 64 }, () => 'E') }),
+    )
+    expect(() => decryptTokenDev(encoded)).not.toThrow()
+  })
+})
+
+describe('decryptTokenDev JSON validation', () => {
+  it('rejects a JSON token missing fingerprint.canvas', () => {
+    const token = JSON.parse(JSON.stringify(createMockToken())) as { fingerprint: Record<string, unknown> }
+    delete token.fingerprint.canvas
+    expect(() => decryptTokenDev(base64urlEncode(Buffer.from(JSON.stringify(token))))).toThrow(/fingerprint.canvas/)
+  })
+
+  it('accepts a complete JSON token and defaults timezone/audio', () => {
+    const mock = JSON.parse(JSON.stringify(createMockToken())) as { fingerprint: Record<string, unknown> }
+    delete mock.fingerprint.timezone
+    delete mock.fingerprint.audio
+    const token = decryptTokenDev(base64urlEncode(Buffer.from(JSON.stringify(mock))))
+    expect(token.fingerprint.timezone).toBe('')
+    expect(token.fingerprint.audio.hash).toBe('')
   })
 })

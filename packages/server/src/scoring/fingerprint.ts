@@ -5,13 +5,13 @@ import type { Fingerprint } from '../model/types.js'
  * Returns score and the reasons array. Does NOT mutate any external state.
  *
  * Score contributions:
- *   canvas empty/zero:                          +25  canvas_fingerprint_empty
+ *   canvas empty/zero:                          +25  canvas_fingerprint_empty_or_zero
  *   webgl hash empty OR renderer empty:         +25  webgl_fingerprint_empty
- *   audio hash empty/zero:                      +20  audio_fingerprint_zero
  *   hardwareConcurrency === 0:                  + 5  hardware_concurrency_zero
  *   canvas+webgl both empty but real UA:        +10  fingerprint_suppressed_suspicious
- *   screen dimensions all 0:                   +10  screen_dimensions_zero
- *   devicePixelRatio === 1.0 AND width > 1920:  + 5  headless_default_dpr
+ *   screen dimensions all 0:                    +10  screen_dimensions_zero
+ *
+ * The audio hash (retired from clients in 0.4.0) is not scored.
  */
 export function scoreFingerprint(
   fp: Fingerprint,
@@ -32,12 +32,6 @@ export function scoreFingerprint(
   if (webglEmpty) {
     score += 25
     reasons.push('webgl_fingerprint_empty')
-  }
-
-  // Audio fingerprint zero or empty — common in sandboxed/headless environments
-  if (fp.audio.hash === '' || fp.audio.hash === '0') {
-    score += 20
-    reasons.push('audio_fingerprint_zero_or_empty')
   }
 
   // No CPU core count — missing in some stripped-down environments
@@ -63,13 +57,6 @@ export function scoreFingerprint(
   if (fp.screen.width === 0 && fp.screen.height === 0 && fp.screen.colorDepth === 0) {
     score += 10
     reasons.push('screen_dimensions_zero')
-  }
-
-  // Default devicePixelRatio of exactly 1.0 on a very wide screen —
-  // headless Chrome/Puppeteer defaults to DPR=1 even on large virtual viewports
-  if (fp.screen.devicePixelRatio === 1.0 && fp.screen.width > 1920) {
-    score += 5
-    reasons.push('headless_default_dpr')
   }
 
   return { score, reasons }

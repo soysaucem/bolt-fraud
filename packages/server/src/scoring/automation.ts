@@ -18,13 +18,13 @@ const INSTANT_BLOCK_SIGNALS = new Set([
  */
 const SCORED_SIGNALS: ReadonlyMap<string, number> = new Map([
   ['languages_empty', 10],
-  ['connection_rtt_zero', 10],
   ['stack_trace_headless', 15],
   ['user_agent_headless', 20],
 ])
 
 /**
  * Integrity violations that are scored rather than instant-blocked.
+ * native_function_toString_overridden is scored too: extensions and polyfills patch it.
  * These prototype chain checks have high false-positive rates from legitimate
  * browser extensions (ad blockers, privacy tools, React DevTools) that patch
  * EventTarget or Node prototypes.
@@ -32,6 +32,7 @@ const SCORED_SIGNALS: ReadonlyMap<string, number> = new Map([
 const SCORED_INTEGRITY_VIOLATIONS: ReadonlyMap<string, number> = new Map([
   ['window_event_target_chain_broken', 15],
   ['document_node_chain_broken', 15],
+  ['native_function_toString_overridden', 30],
 ])
 
 /**
@@ -67,15 +68,10 @@ export function scoreAutomation(
   // Check integrity violations
   if (!detection.integrity.isValid) {
     for (const violation of detection.integrity.violations) {
-      if (violation.name === 'native_function_toString_overridden') {
-        instantBlock = true
-        reasons.push(`instant_block:${violation.name}`)
-      } else {
-        const contribution = SCORED_INTEGRITY_VIOLATIONS.get(violation.name)
-        if (contribution !== undefined) {
-          score += contribution
-          reasons.push(violation.name)
-        }
+      const contribution = SCORED_INTEGRITY_VIOLATIONS.get(violation.name)
+      if (contribution !== undefined) {
+        score += contribution
+        reasons.push(violation.name)
       }
     }
   }

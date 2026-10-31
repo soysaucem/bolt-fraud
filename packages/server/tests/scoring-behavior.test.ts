@@ -67,8 +67,8 @@ describe('scoreBehavior', () => {
       // The implementation skips entropy check when mouse.length <= 2
       const behavior = createMockBehavior({
         mouse: [
-          { type: 'move', x: 0, y: 0, t: 100 },
-          { type: 'move', x: 100, y: 0, t: 200 },
+          { type: 'move', x: 0, y: 0, t: 100, buttons: 0 },
+          { type: 'move', x: 100, y: 0, t: 200, buttons: 0 },
         ],
         totalMouseEvents: 2,
       })
@@ -82,9 +82,9 @@ describe('scoreBehavior', () => {
       // 3 events but they move in random directions → high entropy → no penalty
       const behavior = createMockBehavior({
         mouse: [
-          { type: 'move', x: 0, y: 0, t: 100 },
-          { type: 'move', x: 50, y: 80, t: 200 },   // diagonal
-          { type: 'move', x: 0, y: 120, t: 300 },    // different direction
+          { type: 'move', x: 0, y: 0, t: 100, buttons: 0 },
+          { type: 'move', x: 50, y: 80, t: 200, buttons: 0 },   // diagonal
+          { type: 'move', x: 0, y: 120, t: 300, buttons: 0 },    // different direction
         ],
         totalMouseEvents: 3,
         totalKeyboardEvents: 0,
@@ -358,5 +358,64 @@ describe('computeMouseEntropy', () => {
     const entropy = computeMouseEntropy(events)
     expect(entropy).toBeGreaterThanOrEqual(0)
     expect(entropy).toBeLessThanOrEqual(1.0)
+  })
+})
+
+describe('scoreBehavior 0.4.0 rules', () => {
+  const clean = { totalMouseEvents: 10, totalKeyboardEvents: 10 }
+
+  it('does not flag three straight mouse moves (fewer than 5 movement angles)', () => {
+    const { reasons } = scoreBehavior(
+      createMockBehavior({
+        ...clean,
+        mouse: [
+          { type: 'move', x: 0, y: 0, t: 0, buttons: 0 },
+          { type: 'move', x: 10, y: 0, t: 16, buttons: 0 },
+          { type: 'move', x: 20, y: 0, t: 32, buttons: 0 },
+          { type: 'move', x: 30, y: 0, t: 48, buttons: 0 },
+        ],
+      }),
+    )
+    expect(reasons).not.toContain('mouse_entropy_too_low')
+  })
+
+  it('still flags a long perfectly straight path', () => {
+    const mouse = Array.from({ length: 8 }, (_, i) => ({ type: 'move', x: i * 10, y: 0, t: i * 16, buttons: 0 }))
+    const { reasons } = scoreBehavior(createMockBehavior({ ...clean, mouse }))
+    expect(reasons).toContain('mouse_entropy_too_low')
+  })
+
+  it('uses |mean| so negative interval means still behave symmetrically', () => {
+    // timestamps going backwards: all intervals identical (-100) → uniform, not a division quirk
+    expect(computeKeystrokeUniformity([{ t: 400 }, { t: 300 }, { t: 200 }, { t: 100 }])).toBeCloseTo(1, 5)
+  })
+
+  it('does not flag coarsened (all-zero dwell) timings from rounded timers on their own', () => {
+    // keydown/keyup pairs at the same coarsened timestamp: dwell all 0
+    const keyboard = [0, 100, 200, 300].flatMap((t) => [
+      { type: 'keydown', code: '', t },
+      { type: 'keyup', code: '', t },
+    ])
+    const { reasons } = scoreBehavior(createMockBehavior({ ...clean, keyboard }))
+    expect(reasons).not.toContain('keystroke_timing_too_uniform')
+  })
+
+  it('flags when both flight and dwell times are uniform', () => {
+    const keyboard = [0, 200, 400, 600].flatMap((t) => [
+      { type: 'keydown', code: '', t },
+      { type: 'keyup', code: '', t: t + 50 },
+    ])
+    const { reasons } = scoreBehavior(createMockBehavior({ ...clean, keyboard }))
+    expect(reasons).toContain('keystroke_timing_too_uniform')
+  })
+
+  it('does not flag uniform flight times when dwell times vary like a human', () => {
+    const dwell = [40, 95, 60, 130]
+    const keyboard = [0, 200, 400, 600].flatMap((t, i) => [
+      { type: 'keydown', code: '', t },
+      { type: 'keyup', code: '', t: t + (dwell[i] ?? 0) },
+    ])
+    const { reasons } = scoreBehavior(createMockBehavior({ ...clean, keyboard }))
+    expect(reasons).not.toContain('keystroke_timing_too_uniform')
   })
 })

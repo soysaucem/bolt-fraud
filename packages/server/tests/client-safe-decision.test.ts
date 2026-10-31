@@ -61,7 +61,7 @@ describe('toClientSafeDecision', () => {
 
     const safe = toClientSafeDecision(fullDecision)
 
-    expect((safe as Record<string, unknown>)['score']).toBeUndefined()
+    expect((safe as unknown as Record<string, unknown>)['score']).toBeUndefined()
   })
 
   it('does not expose the reasons field', () => {
@@ -74,7 +74,7 @@ describe('toClientSafeDecision', () => {
 
     const safe = toClientSafeDecision(fullDecision)
 
-    expect((safe as Record<string, unknown>)['reasons']).toBeUndefined()
+    expect((safe as unknown as Record<string, unknown>)['reasons']).toBeUndefined()
   })
 
   it('does not expose the instantBlock field', () => {
@@ -87,7 +87,7 @@ describe('toClientSafeDecision', () => {
 
     const safe = toClientSafeDecision(fullDecision)
 
-    expect((safe as Record<string, unknown>)['instantBlock']).toBeUndefined()
+    expect((safe as unknown as Record<string, unknown>)['instantBlock']).toBeUndefined()
   })
 
   it('returns an object with exactly one key — the decision field', () => {

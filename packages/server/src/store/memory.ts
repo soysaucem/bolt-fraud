@@ -2,10 +2,12 @@ import type { FingerprintStore } from '../model/types.js'
 
 const DEFAULT_MAX_ENTRIES = 10_000
 const DEFAULT_TTL_MS = 86_400_000 // 24 hours
+const MAX_IPS_PER_FINGERPRINT = 10_000
+const MAX_NONCES = 100_000
 
 interface StoreEntry {
   readonly ips: Set<string>
-  readonly lastSeenAt: number
+  lastSeenAt: number
 }
 
 export interface MemoryStoreOptions {
@@ -35,33 +37,22 @@ export class MemoryStore implements FingerprintStore {
   async saveFingerprint(fingerprintHash: string, ip: string): Promise<void> {
     const existing = this._entries.get(fingerprintHash)
     if (existing) {
-      if (existing.ips.size < 10_000) {
-        const newEntry: StoreEntry = {
-          ips: new Set([...existing.ips, ip]),
-          lastSeenAt: Date.now(),
-        }
-        this._entries.set(fingerprintHash, newEntry)
-      } else {
-        // Cap exceeded — still update lastSeenAt without adding IP
-        const newEntry: StoreEntry = {
-          ips: existing.ips,
-          lastSeenAt: Date.now(),
-        }
-        this._entries.set(fingerprintHash, newEntry)
-      }
-    } else {
-      // Evict oldest entry if at capacity
-      if (this._entries.size >= this._maxEntries) {
-        const oldestKey = this._entries.keys().next().value
-        if (oldestKey !== undefined) {
-          this._entries.delete(oldestKey)
-        }
-      }
-      this._entries.set(fingerprintHash, {
-        ips: new Set([ip]),
-        lastSeenAt: Date.now(),
-      })
+      if (existing.ips.size < MAX_IPS_PER_FINGERPRINT) existing.ips.add(ip)
+      existing.lastSeenAt = Date.now()
+      // delete-then-set moves the key to the tail of the Map's insertion order,
+      // so head eviction removes the least recently seen fingerprint
+      this._entries.delete(fingerprintHash)
+      this._entries.set(fingerprintHash, existing)
+      return
     }
+
+    if (this._entries.size >= this._maxEntries) {
+      const oldestKey = this._entries.keys().next().value
+      if (oldestKey !== undefined) {
+        this._entries.delete(oldestKey)
+      }
+    }
+    this._entries.set(fingerprintHash, { ips: new Set([ip]), lastSeenAt: Date.now() })
   }
 
   async getIPCount(fingerprintHash: string): Promise<number> {
@@ -77,19 +68,25 @@ export class MemoryStore implements FingerprintStore {
     return entry.ips.size
   }
 
-  async hasSeenNonce(nonce: string): Promise<boolean> {
+  async claimNonce(nonce: string, ttlMs: number): Promise<boolean> {
     const now = Date.now()
-    // Evict expired nonces
-    for (const [key, expiry] of this._seenNonces) {
-      if (expiry < now) {
-        this._seenNonces.delete(key)
-      }
-    }
-    return this._seenNonces.has(nonce)
-  }
 
-  async saveNonce(nonce: string, ttlMs: number): Promise<void> {
-    this._seenNonces.set(nonce, Date.now() + ttlMs)
+    // Entries are in insertion order; evict only expired ones from the head (O(evicted)).
+    for (const [key, expiry] of this._seenNonces) {
+      if (expiry >= now) break
+      this._seenNonces.delete(key)
+    }
+
+    const expiry = this._seenNonces.get(nonce)
+    if (expiry !== undefined && expiry >= now) return false
+
+    if (this._seenNonces.size >= MAX_NONCES) {
+      const oldest = this._seenNonces.keys().next().value
+      if (oldest !== undefined) this._seenNonces.delete(oldest)
+    }
+    this._seenNonces.delete(nonce)
+    this._seenNonces.set(nonce, now + ttlMs)
+    return true
   }
 
   async close(): Promise<void> {

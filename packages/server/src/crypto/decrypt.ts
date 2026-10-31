@@ -4,7 +4,6 @@ import {
   constants,
   type KeyObject,
 } from 'node:crypto'
-import { inflateRawSync } from 'node:zlib'
 import type {
   Token,
   Fingerprint,
@@ -16,25 +15,30 @@ import type {
 } from '../model/types.js'
 
 const MAX_TOKEN_SIZE = 65_536 // 64 KB
-const MAX_DECOMPRESSED_SIZE = 262_144 // 256 KB
+/** Max base64url length of a MAX_TOKEN_SIZE-byte bundle (plus slack), checked before decoding. */
+const MAX_BUNDLE_CHARS = Math.ceil((MAX_TOKEN_SIZE * 4) / 3) + 4
 
 /**
  * Decrypt an encrypted token bundle from the client.
  * Bundle format: [keyId (u8)] [wrappedKeyLen (u16 big-endian)] [wrappedKey] [iv (12 bytes)] [ciphertext + authTag (last 16 bytes)]
+ * The plaintext must be a v1 binary token (first byte 0x01).
  */
 export function decryptToken(
   bundle: string,
   getPrivateKey: (keyId: number) => KeyObject,
 ): Token {
-  // 1. base64url decode
+  // Reject oversized input before allocating a decoded buffer
+  if (bundle.length > MAX_BUNDLE_CHARS) {
+    throw new Error(`decryptToken: bundle exceeds max size (${bundle.length} chars > ${MAX_BUNDLE_CHARS})`)
+  }
+
   const raw = base64urlDecode(bundle)
 
-  // Token size limit — reject oversized bundles before any expensive ops
   if (raw.length > MAX_TOKEN_SIZE) {
     throw new Error(`decryptToken: bundle exceeds max size (${raw.length} > ${MAX_TOKEN_SIZE})`)
   }
 
-  // 2. Parse bundle: [keyId u8] [wrappedKeyLen u16] [wrappedKey] [iv 12 bytes] [ciphertext+authTag]
+  // Parse bundle: [keyId u8] [wrappedKeyLen u16] [wrappedKey] [iv 12 bytes] [ciphertext+authTag]
   if (raw.length < 3) {
     throw new Error('decryptToken: bundle too short to contain keyId and wrappedKeyLen')
   }
@@ -44,12 +48,19 @@ export function decryptToken(
   if (raw.length < offset + wrappedKeyLen + 12 + 16) {
     throw new Error('decryptToken: bundle too short')
   }
+
+  // RSA-OAEP output is always exactly modulus-length bytes; reject anything else before decrypting
+  const privateKey = getPrivateKey(keyId)
+  const modulusLength = privateKey.asymmetricKeyDetails?.modulusLength
+  if (modulusLength === undefined || wrappedKeyLen !== modulusLength / 8) {
+    throw new Error(`decryptToken: wrapped key length ${wrappedKeyLen} does not match key size`)
+  }
+
   const wrappedKey = raw.subarray(offset, offset + wrappedKeyLen)
   const iv = raw.subarray(offset + wrappedKeyLen, offset + wrappedKeyLen + 12)
   const ciphertextWithTag = raw.subarray(offset + wrappedKeyLen + 12)
 
-  // 3. RSA-OAEP decrypt the wrappedKey → AES session key
-  const privateKey = getPrivateKey(keyId)
+  // RSA-OAEP decrypt the wrappedKey → AES session key
   const aesKeyBytes = privateDecrypt(
     {
       key: privateKey,
@@ -59,97 +70,156 @@ export function decryptToken(
     wrappedKey,
   )
 
-  // 4. AES-256-GCM decrypt
-  // Auth tag is the last 16 bytes of the ciphertext blob
+  // AES-256-GCM decrypt; auth tag is the last 16 bytes of the ciphertext blob
   const authTag = ciphertextWithTag.subarray(ciphertextWithTag.length - 16)
   const ciphertext = ciphertextWithTag.subarray(0, ciphertextWithTag.length - 16)
 
   const decipher = createDecipheriv('aes-256-gcm', aesKeyBytes, iv)
   decipher.setAuthTag(authTag)
-  let plaintext: Buffer = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()])
 
-  // 5. Attempt deflate-raw decompression. The client uses deflate-raw (no zlib header),
-  //    so we can't rely on a fixed magic byte. Try decompression; if it succeeds and the
-  //    result looks like a valid token (version 0x01 or JSON '{'), use decompressed data.
-  plaintext = tryDecompress(plaintext)
-
-  // 6. Deserialize: check if v1 binary format (first byte is version 1)
-  //    or JSON fallback (first byte is '{' = 0x7b)
-  if (plaintext.length > 0 && plaintext.readUInt8(0) === 0x01) {
-    return deserializeBinary(plaintext)
+  const format = plaintext.length > 0 ? plaintext.readUInt8(0) : -1
+  if (format !== 0x01) {
+    throw new Error(`decryptToken: unsupported token format ${format}`)
   }
-
-  // JSON fallback for development
-  return validateTokenShape(JSON.parse(plaintext.toString('utf-8')))
+  return deserializeBinary(plaintext)
 }
 
 /**
  * Dev mode decrypt: no encryption, just base64url decode + deserialize.
  * The client in dev mode sends a plain base64url-encoded JSON or binary token.
+ * Never use in production: JSON tokens are validated structurally only.
  */
 export function decryptTokenDev(base64urlToken: string): Token {
+  if (base64urlToken.length > MAX_BUNDLE_CHARS) {
+    throw new Error(`decryptTokenDev: token exceeds max size (${base64urlToken.length} chars > ${MAX_BUNDLE_CHARS})`)
+  }
   const raw = base64urlDecode(base64urlToken)
 
-  // Token size limit
   if (raw.length > MAX_TOKEN_SIZE) {
     throw new Error(`decryptTokenDev: token exceeds max size (${raw.length} > ${MAX_TOKEN_SIZE})`)
   }
 
-  const bytes = tryDecompress(raw)
-
-  if (bytes.length > 0 && bytes.readUInt8(0) === 0x01) {
-    return deserializeBinary(bytes)
+  if (raw.length > 0 && raw.readUInt8(0) === 0x01) {
+    return deserializeBinary(raw)
   }
 
-  return validateTokenShape(JSON.parse(bytes.toString('utf-8')))
+  return validateTokenShape(JSON.parse(raw.toString('utf-8')))
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+function need(cond: boolean, field: string): void {
+  if (!cond) throw new Error(`validateTokenShape: invalid ${field}`)
+}
+
+function isStr(v: unknown): v is string {
+  return typeof v === 'string'
+}
+
+function isNum(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+function isStrArray(v: unknown): boolean {
+  return Array.isArray(v) && v.every(isStr)
+}
+
+function isNamedList(v: unknown): boolean {
+  return Array.isArray(v) && v.every((e) => isObject(e) && isStr(e.name))
+}
+
+function isEventList(v: unknown, numeric: readonly string[], strings: readonly string[]): boolean {
+  return (
+    Array.isArray(v) &&
+    v.every((e) => isObject(e) && numeric.every((k) => isNum(e[k])) && strings.every((k) => isStr(e[k])))
+  )
 }
 
 /**
  * Runtime validation of a parsed JSON object into a Token shape.
- * Throws if required fields are missing or of wrong type.
+ * Throws if any field the scorers read is missing or of wrong type.
+ * Optional fields absent from older payloads (fingerprint.audio, fingerprint.timezone) are defaulted.
  */
 function validateTokenShape(raw: unknown): Token {
-  if (typeof raw !== 'object' || raw === null) {
+  if (!isObject(raw)) {
     throw new Error('validateTokenShape: not an object')
   }
-  const obj = raw as Record<string, unknown>
-  if (typeof obj.timestamp !== 'number') throw new Error('validateTokenShape: missing timestamp')
-  if (typeof obj.nonce !== 'string') throw new Error('validateTokenShape: missing nonce')
-  if (typeof obj.sdkVersion !== 'string') throw new Error('validateTokenShape: missing sdkVersion')
-  if (typeof obj.fingerprint !== 'object' || obj.fingerprint === null) throw new Error('validateTokenShape: missing fingerprint')
-  if (typeof obj.detection !== 'object' || obj.detection === null) throw new Error('validateTokenShape: missing detection')
-  if (typeof obj.behavior !== 'object' || obj.behavior === null) throw new Error('validateTokenShape: missing behavior')
-  return obj as unknown as Token
-}
+  need(isNum(raw.timestamp), 'timestamp')
+  need(isStr(raw.nonce), 'nonce')
+  need(isStr(raw.sdkVersion), 'sdkVersion')
 
-/**
- * Attempt deflate-raw decompression. The client uses deflate-raw (no zlib header),
- * so there is no fixed magic byte to check. Try inflateRawSync; if it succeeds and
- * the result starts with a valid token marker (0x01 or '{'), use the decompressed data.
- * If decompression fails or the result doesn't look like a token, return the original.
- * Always enforces MAX_DECOMPRESSED_SIZE.
- */
-function tryDecompress(data: Buffer): Buffer {
-  try {
-    const decompressed = inflateRawSync(data) as Buffer
-    if (decompressed.length > MAX_DECOMPRESSED_SIZE) {
-      throw new Error(`tryDecompress: decompressed size ${decompressed.length} exceeds limit ${MAX_DECOMPRESSED_SIZE}`)
-    }
-    const firstByte = decompressed.length > 0 ? decompressed.readUInt8(0) : -1
-    // 0x01 = binary version byte, 0x7b = '{' (JSON)
-    if (firstByte === 0x01 || firstByte === 0x7b) {
-      return decompressed
-    }
-    // Decompressed but not a recognizable format — use original
-    return data
-  } catch (err) {
-    // Not compressed or invalid — use raw bytes
-    // Re-throw if it is our own size-limit error
-    if (err instanceof Error && err.message.startsWith('tryDecompress:')) {
-      throw err
-    }
-    return data
-  }
+  const fp = raw.fingerprint
+  need(isObject(fp), 'fingerprint')
+  const f = fp as Record<string, unknown>
+  need(isObject(f.canvas) && isStr(f.canvas.hash), 'fingerprint.canvas')
+  const webgl = f.webgl
+  need(
+    isObject(webgl) &&
+      isStr(webgl.hash) &&
+      isStr(webgl.renderer) &&
+      isStr(webgl.vendor) &&
+      isStr(webgl.version) &&
+      isStr(webgl.shadingLanguageVersion) &&
+      isStrArray(webgl.extensions),
+    'fingerprint.webgl',
+  )
+  need(f.audio === undefined || (isObject(f.audio) && isStr(f.audio.hash)), 'fingerprint.audio')
+  const nav = f.navigator
+  need(
+    isObject(nav) &&
+      isStr(nav.userAgent) &&
+      isStr(nav.language) &&
+      isStrArray(nav.languages) &&
+      isStr(nav.platform) &&
+      isNum(nav.hardwareConcurrency) &&
+      (nav.deviceMemory === null || isNum(nav.deviceMemory)) &&
+      isNum(nav.maxTouchPoints) &&
+      typeof nav.cookieEnabled === 'boolean' &&
+      (nav.doNotTrack === null || isStr(nav.doNotTrack)) &&
+      isStr(nav.vendor) &&
+      isNum(nav.pluginCount),
+    'fingerprint.navigator',
+  )
+  const screen = f.screen
+  need(
+    isObject(screen) &&
+      ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth', 'devicePixelRatio'].every((k) =>
+        isNum(screen[k]),
+      ),
+    'fingerprint.screen',
+  )
+  need(isNum(f.collectedAt), 'fingerprint.collectedAt')
+  need(f.timezone === undefined || isStr(f.timezone), 'fingerprint.timezone')
+
+  const det = raw.detection
+  need(isObject(det) && typeof det.isAutomated === 'boolean', 'detection')
+  const d = det as Record<string, unknown>
+  need(isNamedList(d.signals) && (d.signals as Record<string, unknown>[]).every((e) => typeof e.detected === 'boolean'), 'detection.signals')
+  const integrity = d.integrity
+  need(isObject(integrity) && typeof integrity.isValid === 'boolean' && isNamedList(integrity.violations), 'detection.integrity')
+
+  const beh = raw.behavior
+  need(isObject(beh), 'behavior')
+  const b = beh as Record<string, unknown>
+  need(isEventList(b.mouse, ['x', 'y', 't', 'buttons'], ['type']), 'behavior.mouse')
+  need(isEventList(b.keyboard, ['t'], ['type']), 'behavior.keyboard')
+  need(isEventList(b.scroll, ['x', 'y', 't'], []), 'behavior.scroll')
+  need(
+    isNum(b.totalMouseEvents) && isNum(b.totalKeyboardEvents) && isNum(b.totalScrollEvents) && isNum(b.snapshotAt),
+    'behavior totals',
+  )
+
+  return {
+    ...raw,
+    fingerprint: {
+      ...f,
+      audio: f.audio ?? { hash: '' },
+      timezone: f.timezone ?? '',
+    },
+  } as unknown as Token
 }
 
 /**
@@ -164,7 +234,7 @@ function tryDecompress(data: Buffer): Buffer {
  *   --- Fingerprint ---
  *   str    canvas.hash
  *   str    webgl.hash
- *   str    audio.hash          ← audio hash comes BEFORE webgl details
+ *   str    audio.hash          ← retired: clients >= 0.4.0 always write ''; read for 0.3.x compat
  *   str    webgl.renderer
  *   str    webgl.vendor
  *   str    webgl.version
@@ -215,7 +285,7 @@ function tryDecompress(data: Buffer): Buffer {
  *   u16    keyboard.length
  *   per keyboard event:
  *     str  type
- *     str  code
+ *     str  code           ← retired: clients >= 0.4.0 always write ''; read for 0.3.x compat
  *     u32  t
  *   u16    scroll.length
  *   per scroll event:
@@ -226,6 +296,10 @@ function tryDecompress(data: Buffer): Buffer {
  *   u32    totalKeyboardEvents
  *   u32    totalScrollEvents
  *   u64    snapshotAt (as two u32s, high then low)
+ *   str    timezone            (optional trailing field; absent from clients < 0.4.0, then '')
+ *
+ * Bytes after the optional timezone are ignored so a newer client can talk to an older server.
+ * Every string and count is capped; exceeding a cap throws `field <name> exceeds <n>`.
  */
 function deserializeBinary(bytes: Buffer): Token {
   let pos = 0
@@ -251,19 +325,26 @@ function deserializeBinary(bytes: Buffer): Token {
     return val
   }
 
-  function readStr(): string {
+  function readStr(name: string, max: number): string {
     const len = readU16()
+    if (len > max) throw new Error(`deserializeBinary: field ${name} exceeds ${max}`)
     if (pos + len > bytes.length) throw new Error('deserializeBinary: string exceeds buffer at offset ' + pos)
     const str = bytes.toString('utf-8', pos, pos + len)
     pos += len
     return str
   }
 
-  function readStrArray(): readonly string[] {
+  function readCount(name: string, max: number): number {
     const count = readU16()
+    if (count > max) throw new Error(`deserializeBinary: field ${name} exceeds ${max}`)
+    return count
+  }
+
+  function readStrArray(name: string, maxCount: number, maxLen: number): readonly string[] {
+    const count = readCount(name, maxCount)
     const arr: string[] = []
     for (let i = 0; i < count; i++) {
-      arr.push(readStr())
+      arr.push(readStr(name, maxLen))
     }
     return arr
   }
@@ -279,32 +360,32 @@ function deserializeBinary(bytes: Buffer): Token {
   const tsLow = readU32()
   const timestamp = tsHigh * 0x1_0000_0000 + tsLow
 
-  const nonce = readStr()
-  const sdkVersion = readStr()
+  const nonce = readStr('nonce', 64)
+  const sdkVersion = readStr('sdkVersion', 32)
 
   // Fingerprint — order matches client serializer exactly
-  const canvasHash = readStr()
-  const webglHash = readStr()
-  const audioHash = readStr()        // audio comes BEFORE webgl renderer
-  const webglRenderer = readStr()
-  const webglVendor = readStr()
-  const webglVersion = readStr()
-  const webglShadingLanguageVersion = readStr()
-  const webglExtensions = readStrArray()
+  const canvasHash = readStr('canvas.hash', 128)
+  const webglHash = readStr('webgl.hash', 128)
+  const audioHash = readStr('audio.hash', 128)   // retired slot: '' from clients >= 0.4.0
+  const webglRenderer = readStr('webgl.renderer', 256)
+  const webglVendor = readStr('webgl.vendor', 256)
+  const webglVersion = readStr('webgl.version', 256)
+  const webglShadingLanguageVersion = readStr('webgl.shadingLanguageVersion', 256)
+  const webglExtensions = readStrArray('webgl.extensions', 64, 256)
 
-  const navUserAgent = readStr()
-  const navLanguage = readStr()
+  const navUserAgent = readStr('navigator.userAgent', 512)
+  const navLanguage = readStr('navigator.language', 128)
   const hardwareConcurrency = readU16()   // u16
   const maxTouchPoints = readU16()        // u16
   const pluginCount = readU16()           // u16
   const deviceMemoryRaw = readU8()        // u8: 0 = null, else value
   const deviceMemory: number | null = deviceMemoryRaw === 0 ? null : deviceMemoryRaw
   const cookieEnabled = readU8() === 1
-  const navLanguages = readStrArray()
+  const navLanguages = readStrArray('navigator.languages', 32, 128)
 
-  const navPlatform = readStr()
-  const navVendor = readStr()
-  const doNotTrackRaw = readStr()
+  const navPlatform = readStr('navigator.platform', 128)
+  const navVendor = readStr('navigator.vendor', 128)
+  const doNotTrackRaw = readStr('navigator.doNotTrack', 128)
   const doNotTrack: string | null = doNotTrackRaw === '' ? null : doNotTrackRaw
 
   const screenWidth = readU16()
@@ -319,6 +400,72 @@ function deserializeBinary(bytes: Buffer): Token {
   const collectedAtHigh = readU32()
   const collectedAtLow = readU32()
   const collectedAt = collectedAtHigh * 0x1_0000_0000 + collectedAtLow
+
+  // DetectionData — no detail flag in binary
+  const isAutomated = readU8() === 1
+  const signalCount = readCount('detection.signals', 64)
+  const signals: Array<{ readonly name: string; readonly detected: boolean }> = []
+  for (let i = 0; i < signalCount; i++) {
+    const name = readStr('signal.name', 128)
+    const detected = readU8() === 1
+    signals.push({ name, detected })
+  }
+  const integrityValid = readU8() === 1
+  const violationCount = readCount('detection.violations', 64)
+  const violations: Array<{ readonly name: string }> = []
+  for (let i = 0; i < violationCount; i++) {
+    const name = readStr('violation.name', 128)
+    violations.push({ name })
+  }
+
+  const detection: DetectionData = {
+    isAutomated,
+    signals,
+    integrity: {
+      isValid: integrityValid,
+      violations,
+    },
+  }
+
+  // BehaviorData
+  const mouseCount = readCount('behavior.mouse', 512)
+  const mouse: BfMouseEvent[] = []
+  for (let i = 0; i < mouseCount; i++) {
+    const type = readStr('mouse.type', 16)
+    const x = readU16()
+    const y = readU16()
+    const t = readU32()
+    const buttons = readU8()
+    mouse.push({ type, x, y, t, buttons })
+  }
+
+  const keyboardCount = readCount('behavior.keyboard', 512)
+  const keyboard: BfKeyboardEvent[] = []
+  for (let i = 0; i < keyboardCount; i++) {
+    const type = readStr('keyboard.type', 16)
+    const code = readStr('keyboard.code', 32)
+    const t = readU32()
+    keyboard.push({ type, code, t })
+  }
+
+  const scrollCount = readCount('behavior.scroll', 512)
+  const scroll: BfScrollEvent[] = []
+  for (let i = 0; i < scrollCount; i++) {
+    const x = readU16()
+    const y = readU16()
+    const t = readU32()
+    scroll.push({ x, y, t })
+  }
+
+  const totalMouseEvents = readU32()
+  const totalKeyboardEvents = readU32()
+  const totalScrollEvents = readU32()
+  const snapHigh = readU32()
+  const snapLow = readU32()
+  const snapshotAt = snapHigh * 0x1_0000_0000 + snapLow
+
+  // Optional trailing field (clients >= 0.4.0); anything after it is ignored
+  const timezone = pos < bytes.length ? readStr('timezone', 64) : ''
 
   const fingerprint: Fingerprint = {
     canvas: { hash: canvasHash },
@@ -354,70 +501,9 @@ function deserializeBinary(bytes: Buffer): Token {
       devicePixelRatio,
     },
     collectedAt,
+    timezone,
   }
 
-  // DetectionData — no detail flag in binary
-  const isAutomated = readU8() === 1
-  const signalCount = readU16()
-  const signals: Array<{ readonly name: string; readonly detected: boolean }> = []
-  for (let i = 0; i < signalCount; i++) {
-    const name = readStr()
-    const detected = readU8() === 1
-    signals.push({ name, detected })
-  }
-  const integrityValid = readU8() === 1
-  const violationCount = readU16()
-  const violations: Array<{ readonly name: string }> = []
-  for (let i = 0; i < violationCount; i++) {
-    const name = readStr()
-    violations.push({ name })
-  }
-
-  const detection: DetectionData = {
-    isAutomated,
-    signals,
-    integrity: {
-      isValid: integrityValid,
-      violations,
-    },
-  }
-
-  // BehaviorData
-  const mouseCount = readU16()
-  const mouse: BfMouseEvent[] = []
-  for (let i = 0; i < mouseCount; i++) {
-    const type = readStr()
-    const x = readU16()
-    const y = readU16()
-    const t = readU32()
-    const buttons = readU8()
-    mouse.push({ type, x, y, t, buttons })
-  }
-
-  const keyboardCount = readU16()
-  const keyboard: BfKeyboardEvent[] = []
-  for (let i = 0; i < keyboardCount; i++) {
-    const type = readStr()
-    const code = readStr()
-    const t = readU32()
-    keyboard.push({ type, code, t })
-  }
-
-  const scrollCount = readU16()
-  const scroll: BfScrollEvent[] = []
-  for (let i = 0; i < scrollCount; i++) {
-    const x = readU16()
-    const y = readU16()
-    const t = readU32()
-    scroll.push({ x, y, t })
-  }
-
-  const totalMouseEvents = readU32()
-  const totalKeyboardEvents = readU32()
-  const totalScrollEvents = readU32()
-  const snapHigh = readU32()
-  const snapLow = readU32()
-  const snapshotAt = snapHigh * 0x1_0000_0000 + snapLow
 
   const behavior: BehaviorData = {
     mouse,
@@ -433,7 +519,5 @@ function deserializeBinary(bytes: Buffer): Token {
 }
 
 export function base64urlDecode(encoded: string): Buffer {
-  const padded = encoded.replace(/-/g, '+').replace(/_/g, '/') +
-    '='.repeat((4 - (encoded.length % 4)) % 4)
-  return Buffer.from(padded, 'base64')
+  return Buffer.from(encoded, 'base64url')
 }

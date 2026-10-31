@@ -451,3 +451,48 @@ describe('generateKeyPairSync with custom modulusLength', () => {
     expect(pair4096.privateKey.length).toBeGreaterThan(pair2048.privateKey.length)
   }, 30_000)
 })
+
+describe('KeyManager.addKeyPair validation (0.4.0)', () => {
+  it('throws when the public key does not match the private key', () => {
+    const a = generateKeyPairSync()
+    const b = generateKeyPairSync()
+    const km = new KeyManager()
+
+    expect(() => km.addKeyPair(0, a.publicKey, b.privateKey)).toThrow(/does not match/)
+  })
+
+  it('loads PEMs whose newlines are escaped as literal \\n sequences', () => {
+    const pair = generateKeyPairSync()
+    const escapedPublic = pair.publicKey.replace(/\n/g, '\\n')
+    const escapedPrivate = pair.privateKey.replace(/\n/g, '\\n')
+    const km = new KeyManager()
+
+    km.addKeyPair(0, escapedPublic, escapedPrivate)
+
+    expect(km.getPublicKey()).toBe(pair.publicKey)
+    expect(km.getPrivateKeyObject().type).toBe('private')
+  })
+
+  it.each([-1, 256, 1.5, Number.NaN])('rejects keyId %s', (keyId) => {
+    const pair = generateKeyPairSync()
+    const km = new KeyManager()
+
+    expect(() => km.addKeyPair(keyId, pair.publicKey, pair.privateKey)).toThrow(/keyId/)
+  })
+
+  it('accepts the boundary keyIds 0 and 255', () => {
+    const pair = generateKeyPairSync()
+    const km = new KeyManager()
+
+    expect(() => km.addKeyPair(0, pair.publicKey, pair.privateKey)).not.toThrow()
+    expect(() => km.addKeyPair(255, pair.publicKey, pair.privateKey)).not.toThrow()
+  })
+
+  it('returns the cached KeyObject instance on repeated lookups', () => {
+    const pair = generateKeyPairSync()
+    const km = new KeyManager()
+    km.addKeyPair(0, pair.publicKey, pair.privateKey)
+
+    expect(km.getPrivateKeyObject(0)).toBe(km.getPrivateKeyObject(0))
+  })
+})

@@ -83,7 +83,7 @@ describe('Built-in scorer classes', () => {
 describe('Custom scorer registration', () => {
   it('calls the custom scorer score() method when engine.score() is invoked', async () => {
     // Arrange
-    const customScore = vi.fn<(token: Token, context: ScoringContext) => ScorerResult>()
+    const customScore = vi.fn<[Token, ScoringContext], ScorerResult>()
       .mockReturnValue({ score: 0, reasons: [] })
 
     const customScorer: Scorer = { name: 'custom_test', score: customScore }

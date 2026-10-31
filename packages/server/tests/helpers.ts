@@ -41,6 +41,7 @@ export function createMockFingerprint(overrides?: Partial<Fingerprint>): Fingerp
       devicePixelRatio: 2,
     },
     collectedAt: 1700000000000,
+    timezone: 'Asia/Ho_Chi_Minh',
     ...overrides,
   }
 }

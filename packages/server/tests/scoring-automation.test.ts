@@ -116,8 +116,8 @@ describe('scoreAutomation', () => {
     })
   })
 
-  describe('integrity violations that trigger instant block', () => {
-    it('triggers instant block when native_function_toString_overridden violation is present', () => {
+  describe('integrity violations', () => {
+    it('scores native_function_toString_overridden as 30 and does not instant-block', () => {
       const detection = createMockDetection({
         isAutomated: false,
         signals: [],
@@ -129,8 +129,9 @@ describe('scoreAutomation', () => {
 
       const result = scoreAutomation(detection)
 
-      expect(result.instantBlock).toBe(true)
-      expect(result.reasons).toContain('instant_block:native_function_toString_overridden')
+      expect(result.instantBlock).toBe(false)
+      expect(result.score).toBe(30)
+      expect(result.reasons).toContain('native_function_toString_overridden')
     })
 
     it('scores window_event_target_chain_broken as 15 points instead of instant block', () => {
@@ -196,7 +197,7 @@ describe('scoreAutomation', () => {
   })
 
   describe('combination of signals and violations', () => {
-    it('triggers instant block when both signal and integrity violation are present', () => {
+    it('instant-blocks on the signal and still scores the integrity violation', () => {
       const detection = createMockDetection({
         isAutomated: true,
         signals: [createAutomationSignal('webdriver_present', true)],
@@ -210,7 +211,8 @@ describe('scoreAutomation', () => {
 
       expect(result.instantBlock).toBe(true)
       expect(result.reasons).toContain('instant_block:webdriver_present')
-      expect(result.reasons).toContain('instant_block:native_function_toString_overridden')
+      expect(result.score).toBe(30)
+      expect(result.reasons).toContain('native_function_toString_overridden')
     })
   })
 
@@ -231,20 +233,17 @@ describe('scoreAutomation', () => {
       expect(result.reasons).toContain('languages_empty')
     })
 
-    it('adds +10 score for connection_rtt_zero signal when isAutomated=true', () => {
-      // Arrange: connection_rtt_zero is in SCORED_SIGNALS with contribution 10
+    it('does not score connection_rtt_zero (removed from scored signals)', () => {
       const detection = createMockDetection({
         isAutomated: true,
         signals: [createAutomationSignal('connection_rtt_zero', true)],
       })
 
-      // Act
       const result = scoreAutomation(detection)
 
-      // Assert
       expect(result.instantBlock).toBe(false)
-      expect(result.score).toBe(10)
-      expect(result.reasons).toContain('connection_rtt_zero')
+      expect(result.score).toBe(0)
+      expect(result.reasons).not.toContain('connection_rtt_zero')
     })
 
     it('adds +15 score for stack_trace_headless signal when isAutomated=true', () => {
@@ -323,13 +322,13 @@ describe('scoreAutomation', () => {
       expect(result.reasons).toContain('languages_empty')
     })
 
-    it('adds +20 total when both languages_empty and connection_rtt_zero are detected', () => {
+    it('adds +30 total when languages_empty and user_agent_headless are detected', () => {
       // Arrange: both SCORED_SIGNALS detected together
       const detection = createMockDetection({
         isAutomated: true,
         signals: [
           createAutomationSignal('languages_empty', true),
-          createAutomationSignal('connection_rtt_zero', true),
+          createAutomationSignal('user_agent_headless', true),
         ],
       })
 
@@ -338,9 +337,9 @@ describe('scoreAutomation', () => {
 
       // Assert
       expect(result.instantBlock).toBe(false)
-      expect(result.score).toBe(20)
+      expect(result.score).toBe(30)
       expect(result.reasons).toContain('languages_empty')
-      expect(result.reasons).toContain('connection_rtt_zero')
+      expect(result.reasons).toContain('user_agent_headless')
     })
 
     it('does NOT score languages_empty when isAutomated=false', () => {

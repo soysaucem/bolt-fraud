@@ -88,30 +88,13 @@ describe('scoreFingerprint', () => {
     expect(reasons).not.toContain('webgl_fingerprint_empty')
   })
 
-  it('adds 20 when audio hash is empty string', () => {
-    const fp = createMockFingerprint({ audio: { hash: '' } })
+  it.each(['', '0', 'validaudiohash'])('does not score the retired audio hash (%j)', (hash) => {
+    const fp = createMockFingerprint({ audio: { hash } })
 
     const { score, reasons } = scoreFingerprint(fp)
 
-    expect(score).toBe(20)
-    expect(reasons).toContain('audio_fingerprint_zero_or_empty')
-  })
-
-  it('adds 20 when audio hash is "0"', () => {
-    const fp = createMockFingerprint({ audio: { hash: '0' } })
-
-    const { score, reasons } = scoreFingerprint(fp)
-
-    expect(score).toBe(20)
-    expect(reasons).toContain('audio_fingerprint_zero_or_empty')
-  })
-
-  it('does not add audio penalty when audio hash is valid', () => {
-    const fp = createMockFingerprint({ audio: { hash: 'validaudiohash' } })
-
-    const { reasons } = scoreFingerprint(fp)
-
-    expect(reasons).not.toContain('audio_fingerprint_zero_or_empty')
+    expect(score).toBe(0)
+    expect(reasons).toEqual([])
   })
 
   it('adds 5 when hardwareConcurrency is 0', () => {
@@ -159,7 +142,7 @@ describe('scoreFingerprint', () => {
     expect(reasons).not.toContain('hardware_concurrency_zero')
   })
 
-  it('adds 75 total when all four signals are bad (canvas + webgl + audio + hardwareConcurrency)', () => {
+  it('adds 55 total when all three signals are bad (canvas + webgl + hardwareConcurrency)', () => {
     // Arrange: everything is empty/zero
     const fp = createMockFingerprint({
       canvas: { hash: '' },
@@ -190,11 +173,10 @@ describe('scoreFingerprint', () => {
     // Act
     const { score, reasons } = scoreFingerprint(fp)
 
-    // Assert: 25 + 25 + 20 + 5 = 75
-    expect(score).toBe(75)
+    // Assert: 25 + 25 + 5 = 55 (audio is no longer scored)
+    expect(score).toBe(55)
     expect(reasons).toContain('canvas_fingerprint_empty_or_zero')
     expect(reasons).toContain('webgl_fingerprint_empty')
-    expect(reasons).toContain('audio_fingerprint_zero_or_empty')
     expect(reasons).toContain('hardware_concurrency_zero')
   })
 
@@ -403,89 +385,23 @@ describe('scoreFingerprint', () => {
     })
   })
 
-  describe('headless_default_dpr', () => {
-    it('adds +5 when devicePixelRatio is 1.0 AND screen width > 1920', () => {
-      // Arrange: Puppeteer/headless default DPR on an oversized virtual viewport
-      const fp = createMockFingerprint({
-        screen: {
-          width: 2048,
-          height: 1080,
-          availWidth: 2048,
-          availHeight: 1080,
-          colorDepth: 24,
-          pixelDepth: 24,
-          devicePixelRatio: 1.0,
-        },
-      })
-
-      // Act
-      const { score, reasons } = scoreFingerprint(fp)
-
-      // Assert
-      expect(reasons).toContain('headless_default_dpr')
-      expect(score).toBe(5)
-    })
-
-    it('does NOT add headless_default_dpr when DPR is 2.0 (non-default)', () => {
-      // Arrange: DPR = 2 with wide screen — not the headless pattern
+  describe('devicePixelRatio', () => {
+    it('does not penalise DPR 1.0 on a wide display (2560x1440 monitors are common)', () => {
       const fp = createMockFingerprint({
         screen: {
           width: 2560,
           height: 1440,
           availWidth: 2560,
-          availHeight: 1440,
-          colorDepth: 24,
-          pixelDepth: 24,
-          devicePixelRatio: 2.0,
-        },
-      })
-
-      // Act
-      const { reasons } = scoreFingerprint(fp)
-
-      // Assert
-      expect(reasons).not.toContain('headless_default_dpr')
-    })
-
-    it('does NOT add headless_default_dpr when DPR is 1.0 but width is exactly 1920 (not > 1920)', () => {
-      // Arrange: DPR=1, width=1920 — boundary: must be STRICTLY greater than 1920
-      const fp = createMockFingerprint({
-        screen: {
-          width: 1920,
-          height: 1080,
-          availWidth: 1920,
-          availHeight: 1080,
+          availHeight: 1400,
           colorDepth: 24,
           pixelDepth: 24,
           devicePixelRatio: 1.0,
         },
       })
 
-      // Act
-      const { reasons } = scoreFingerprint(fp)
+      const { score, reasons } = scoreFingerprint(fp)
 
-      // Assert
-      expect(reasons).not.toContain('headless_default_dpr')
-    })
-
-    it('does NOT add headless_default_dpr when DPR is 1.0 but width is below 1920', () => {
-      // Arrange: narrow screen with default DPR — not suspicious
-      const fp = createMockFingerprint({
-        screen: {
-          width: 1280,
-          height: 720,
-          availWidth: 1280,
-          availHeight: 720,
-          colorDepth: 24,
-          pixelDepth: 24,
-          devicePixelRatio: 1.0,
-        },
-      })
-
-      // Act
-      const { reasons } = scoreFingerprint(fp)
-
-      // Assert
+      expect(score).toBe(0)
       expect(reasons).not.toContain('headless_default_dpr')
     })
   })

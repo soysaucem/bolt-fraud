@@ -1,3 +1,5 @@
+import type { RiskEngineConfig } from '../scoring/engine.js'
+
 // ─── Token (deserialized from client) ───────────────────────────────────────
 
 export interface Token {
@@ -43,6 +45,8 @@ export interface Fingerprint {
     readonly devicePixelRatio: number
   }
   readonly collectedAt: number
+  /** IANA time zone reported by the client; '' when absent (clients < 0.4.0). */
+  readonly timezone: string
 }
 
 export interface DetectionData {
@@ -119,13 +123,16 @@ export function toClientSafeDecision(decision: Decision): ClientSafeDecision {
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-export interface BoltFraudServerConfig {
+export interface BoltFraudServerConfig extends RiskEngineConfig {
   readonly privateKeyPem?: string
   readonly publicKeyPem?: string
-  readonly blockThreshold?: number
-  readonly challengeThreshold?: number
-  readonly store?: FingerprintStore
   readonly additionalKeys?: readonly { readonly keyId: number; readonly publicKeyPem: string; readonly privateKeyPem: string }[]
+  /** Key id used by getPublicKey() and as the default private key. Default 0. */
+  readonly defaultKeyId?: number
+  /** Accept unencrypted dev tokens. Throws at creation when NODE_ENV === 'production'. */
+  readonly devMode?: boolean
+  /** Called when a token fails to decrypt. */
+  readonly onError?: (err: unknown) => void
 }
 
 // ─── Store ──────────────────────────────────────────────────────────────────
@@ -133,7 +140,10 @@ export interface BoltFraudServerConfig {
 export interface FingerprintStore {
   saveFingerprint(fingerprintHash: string, ip: string): Promise<void>
   getIPCount(fingerprintHash: string): Promise<number>
-  hasSeenNonce?(nonce: string): Promise<boolean>
-  saveNonce?(nonce: string, ttlMs: number): Promise<void>
+  /**
+   * Atomically claim a nonce. Resolves true if this call claimed it (first use),
+   * false if it was already claimed (replay). The claim expires after ttlMs.
+   */
+  claimNonce?(nonce: string, ttlMs: number): Promise<boolean>
   close?(): Promise<void>
 }

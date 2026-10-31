@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { createBoltFraud, generateKeyPairSync, decryptTokenDev, base64urlDecode, MemoryStore } from '../src/index.js'
-import { createMockToken } from './helpers.js'
+import { describe, it, expect, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { createBoltFraud, generateKeyPairSync, decryptTokenDev, base64urlDecode, MemoryStore, computeFingerprintHash } from '../src/index.js'
+import { createMockToken, createMockFingerprint } from './helpers.js'
 
 /**
  * Integration tests for the full server pipeline:
@@ -65,7 +66,7 @@ describe('Integration: createBoltFraud verify pipeline', () => {
 
     expect(decision.decision).toBe('block')
     expect(decision.instantBlock).toBe(true)
-    expect(decision.reasons).toContain('token_decryption_failed')
+    expect(decision.reasons[0]).toMatch(/^token_decryption_failed:/)
   })
 
   it('createBoltFraud with MemoryStore works end to end', async () => {
@@ -76,7 +77,7 @@ describe('Integration: createBoltFraud verify pipeline', () => {
     const decision = await bf.verify('invalid-token', '1.2.3.4')
 
     expect(decision.decision).toBe('block')
-    expect(decision.reasons).toContain('token_decryption_failed')
+    expect(decision.reasons[0]).toMatch(/^token_decryption_failed:/)
   })
 })
 
@@ -133,47 +134,103 @@ describe('createBoltFraud partial key validation', () => {
   })
 })
 
-describe('Integration: fingerprint hash fallback to webgl when canvas is empty', () => {
-  it('uses webgl hash for store lookup when canvas hash is empty string', async () => {
-    // Arrange: canvas hash empty, webgl hash non-empty
-    // The engine computes: canvas.hash || webgl.hash || audio.hash || 'unknown'
-    // So empty canvas → uses webgl hash as the fingerprint key
-    const store = new MemoryStore()
-    const bf = createBoltFraud({ store })
+describe('computeFingerprintHash', () => {
+  it('is the first 32 hex chars of sha256(canvas|renderer|WxH)', () => {
+    const token = createMockToken()
+    const expected = createHash('sha256')
+      .update(`${token.fingerprint.canvas.hash}|${token.fingerprint.webgl.renderer}|1920x1080`)
+      .digest('hex')
+      .slice(0, 32)
 
-    // Save a fingerprint using the webgl hash directly (simulates what verify does internally)
-    const webglHash = 'def456webglhash'
-    await store.saveFingerprint(webglHash, '5.5.5.5')
-
-    // Verify that getIPCount works with the webgl hash key
-    const count = await store.getIPCount(webglHash)
-
-    // Assert: the store tracks the webgl hash key correctly
-    expect(count).toBe(1)
-
-    // The BoltFraud verify pipeline also uses canvas||webgl||audio||'unknown' to build the key
-    expect(typeof bf.verify).toBe('function')
+    expect(computeFingerprintHash(token)).toBe(expected)
+    expect(computeFingerprintHash(token)).toMatch(/^[0-9a-f]{32}$/)
   })
 
-  it('uses audio hash for store lookup when both canvas and webgl hashes are empty', async () => {
-    // Arrange: canvas empty, webgl empty, audio non-empty
-    // Expected hash key: '' || '' || 'ghi789audiohash' = 'ghi789audiohash'
-    const store = new MemoryStore()
-    const audioHash = 'ghi789audiohash'
-
-    await store.saveFingerprint(audioHash, '9.9.9.9')
-
-    // Assert
-    expect(await store.getIPCount(audioHash)).toBe(1)
-    expect(await store.getIPCount('')).toBe(0) // empty string not used as key
+  it("returns 'unknown' when canvas hash and renderer are both empty", () => {
+    const base = createMockToken()
+    const token = createMockToken({
+      fingerprint: createMockFingerprint({ canvas: { hash: '' }, webgl: { ...base.fingerprint.webgl, renderer: '' } }),
+    })
+    expect(computeFingerprintHash(token)).toBe('unknown')
   })
 
-  it('falls back to "unknown" key when all hashes are empty', async () => {
-    // Arrange: all hashes empty → key becomes 'unknown'
-    const store = new MemoryStore()
-    await store.saveFingerprint('unknown', '7.7.7.7')
+  it('differs when only the screen size differs', () => {
+    const a = createMockToken()
+    const b = createMockToken({
+      fingerprint: createMockFingerprint({ screen: { ...a.fingerprint.screen, width: 2560, height: 1440 } }),
+    })
+    expect(computeFingerprintHash(a)).not.toBe(computeFingerprintHash(b))
+  })
+})
 
-    // Assert
-    expect(await store.getIPCount('unknown')).toBe(1)
+describe('createBoltFraud options', () => {
+  const emptyBehaviorToken = (): string => {
+    const t = createMockToken({
+      behavior: {
+        mouse: [],
+        keyboard: [],
+        scroll: [],
+        totalMouseEvents: 0,
+        totalKeyboardEvents: 0,
+        totalScrollEvents: 0,
+        snapshotAt: 5000,
+      },
+    })
+    return base64urlEncode(JSON.stringify(t))
+  }
+
+  it('behaviorScoring: false scores a zero-event token 0 and allows', async () => {
+    const bf = createBoltFraud({ devMode: true, behaviorScoring: false })
+    const decision = await bf.verify(emptyBehaviorToken(), '1.1.1.1')
+    expect(decision.score).toBe(0)
+    expect(decision.decision).toBe('allow')
+  })
+
+  it('behaviorScoring defaults to true (no_interaction_events is scored)', async () => {
+    const bf = createBoltFraud({ devMode: true })
+    const decision = await bf.verify(emptyBehaviorToken(), '1.1.1.1')
+    expect(decision.reasons).toContain('no_interaction_events')
+  })
+
+  it('devMode throws at creation when NODE_ENV is production', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      expect(() => createBoltFraud({ devMode: true })).toThrow(/devMode/)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('devMode accepts unencrypted tokens', async () => {
+    const bf = createBoltFraud({ devMode: true })
+    const decision = await bf.verify(base64urlEncode(JSON.stringify(createMockToken())), '1.1.1.1')
+    expect(decision.reasons.join(',')).not.toMatch(/token_decryption_failed/)
+  })
+
+  it('invokes onError when decryption fails', async () => {
+    const onError = vi.fn()
+    const bf = createBoltFraud({ onError })
+    await bf.verify('garbage')
+    expect(onError).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes ipCountThreshold, thresholds and token age through to the engine', async () => {
+    const bf = createBoltFraud({ devMode: true, challengeThreshold: 1, blockThreshold: 1000, maxTokenAgeMs: 1 })
+    const old = createMockToken({ timestamp: Date.now() - 60_000 })
+    const decision = await bf.verify(base64urlEncode(JSON.stringify(old)), '1.1.1.1')
+    expect(decision.reasons).toContain('token_too_old')
+    expect(decision.decision).toBe('challenge')
+  })
+
+  it('defaultKeyId selects the key returned by getPublicKey', () => {
+    const k0 = generateKeyPairSync()
+    const k5 = generateKeyPairSync()
+    const bf = createBoltFraud({
+      privateKeyPem: k0.privateKey,
+      publicKeyPem: k0.publicKey,
+      additionalKeys: [{ keyId: 5, publicKeyPem: k5.publicKey, privateKeyPem: k5.privateKey }],
+      defaultKeyId: 5,
+    })
+    expect(bf.getPublicKey()).toBe(k5.publicKey)
   })
 })

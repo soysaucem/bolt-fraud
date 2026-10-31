@@ -61,16 +61,28 @@
  *   u32    totalKeyboardEvents
  *   u32    totalScrollEvents
  *   u32+u32 snapshotAt (high, low)
+ *   str    timezone (optional trailing field, clients >= 0.4.0)
+ *
+ * This file's serializer deliberately writes real audio hashes and keyboard codes (the
+ * 0.3.x layout) to prove the server still reads the retired slots. The contract against the
+ * real 0.4.0 client serializer lives in client-contract.test.ts.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest'
-import { webcrypto } from 'node:crypto'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
+import { webcrypto, privateDecrypt } from 'node:crypto'
+import { deflateRawSync } from 'node:zlib'
 import { generateKeyPairSync, KeyManager } from '../src/crypto/keys.js'
 import { decryptToken } from '../src/crypto/decrypt.js'
 import { encrypt } from '../../client/src/transport/crypto.js'
 import { BinaryWriter } from '../../client/src/transport/serializer.js'
 import type { KeyPair } from '../src/crypto/keys.js'
 import type { Token } from '../src/model/types.js'
+
+// Spy-able wrapper so tests can prove privateDecrypt is (not) reached.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>()
+  return { ...actual, privateDecrypt: vi.fn(actual.privateDecrypt) }
+})
 
 // Wire up Web Crypto API for Node.js — required by the client's encrypt() which uses
 // globalThis.crypto.subtle. Available natively in Node 18+ via node:crypto.
@@ -197,6 +209,8 @@ function serializeForServer(token: Token): Uint8Array {
   w.writeU32(Math.floor(snap / 0x1_0000_0000))
   w.writeU32(snap >>> 0)
 
+  w.writeStr(token.fingerprint.timezone)
+
   return w.finish()
 }
 
@@ -241,6 +255,7 @@ function buildToken(overrides?: Partial<Token>): Token {
         devicePixelRatio: 2,
       },
       collectedAt: 1700000000000,
+      timezone: 'Asia/Ho_Chi_Minh',
     },
     detection: {
       isAutomated: false,
@@ -315,6 +330,7 @@ describe('E2E crypto pipeline: client serialize+encrypt → server decryptToken'
     expect(result.fingerprint.canvas.hash).toBe(token.fingerprint.canvas.hash)
     expect(result.fingerprint.webgl.hash).toBe(token.fingerprint.webgl.hash)
     expect(result.fingerprint.audio.hash).toBe(token.fingerprint.audio.hash)
+    expect(result.fingerprint.timezone).toBe('Asia/Ho_Chi_Minh')
 
     // Assert — WebGL renderer details
     expect(result.fingerprint.webgl.renderer).toBe(token.fingerprint.webgl.renderer)
@@ -687,8 +703,8 @@ describe('E2E crypto pipeline: client serialize+encrypt → server decryptToken'
   })
 
   it('round-trip preserves timestamp split across two u32s for large values', async () => {
-    // Use a timestamp that has a non-zero high word (after year 2106 it would overflow,
-    // but current epoch timestamps have high=0; test a synthetic large value instead).
+    // Current epoch-millisecond timestamps (~1.7e12) already exceed 2^32, so their high word
+    // is non-zero; this synthetic value pins the split exactly:
     // 0x1_0000_0001 = 4294967297, which has high=1, low=1
     const largeTimestamp = 0x1_0000_0001
     const token = buildToken({ timestamp: largeTimestamp })
@@ -697,5 +713,58 @@ describe('E2E crypto pipeline: client serialize+encrypt → server decryptToken'
     const result = decryptToken(bundle, (id) => keyManager.getPrivateKeyObject(id))
 
     expect(result.timestamp).toBe(largeTimestamp)
+  })
+})
+
+// ─── Hardened decryptToken (0.4.0) ───────────────────────────────────────────
+
+/** Encrypt arbitrary plaintext with the real client envelope. */
+function encryptRaw(plaintext: Uint8Array): Promise<string> {
+  return encrypt(plaintext, keyPair.publicKey, 0)
+}
+
+describe('decryptToken hardening', () => {
+  it('rejects a deflate-compressed plaintext as an unsupported format', async () => {
+    const compressed = deflateRawSync(serializeForServer(buildToken()))
+    const bundle = await encryptRaw(compressed)
+
+    expect(() => decryptToken(bundle, (id) => keyManager.getPrivateKeyObject(id))).toThrow(
+      /unsupported token format/,
+    )
+  })
+
+  it('rejects a JSON plaintext (JSON is only accepted by decryptTokenDev)', async () => {
+    const bundle = await encryptRaw(new TextEncoder().encode(JSON.stringify(buildToken())))
+
+    expect(() => decryptToken(bundle, (id) => keyManager.getPrivateKeyObject(id))).toThrow(
+      /unsupported token format 123/,
+    )
+  })
+
+  it('rejects an oversized bundle string before decoding it', () => {
+    const decodeSpy = vi.spyOn(Buffer, 'from')
+    try {
+      const oversized = 'A'.repeat(Math.ceil((65_536 * 4) / 3) + 5)
+      expect(() => decryptToken(oversized, (id) => keyManager.getPrivateKeyObject(id))).toThrow(/exceeds max size/)
+      expect(decodeSpy).not.toHaveBeenCalled()
+    } finally {
+      decodeSpy.mockRestore()
+    }
+  })
+
+  it('rejects a wrapped key whose length differs from the modulus size without calling privateDecrypt', async () => {
+    const forged = Buffer.concat([
+      Buffer.from([0]),
+      Buffer.from([0, 100]),
+      Buffer.alloc(100, 1), // wrappedKey: 100 bytes, key is 256
+      Buffer.alloc(12, 2), // iv
+      Buffer.alloc(32, 3), // ciphertext + tag
+    ]).toString('base64url')
+
+    vi.mocked(privateDecrypt).mockClear()
+    expect(() => decryptToken(forged, (id) => keyManager.getPrivateKeyObject(id))).toThrow(
+      /wrapped key length 100/,
+    )
+    expect(privateDecrypt).not.toHaveBeenCalled()
   })
 })

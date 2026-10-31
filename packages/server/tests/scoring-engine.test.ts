@@ -3,6 +3,9 @@ import { RiskEngine } from '../src/scoring/engine.js'
 import { createMockToken, createMockFingerprint, createMockDetection, createMockBehavior } from './helpers.js'
 import type { FingerprintStore } from '../src/model/types.js'
 
+// Default acceptance window (maxTokenAbsoluteAgeMs): 1 hour
+const WINDOW = 3_600_000
+
 // ─── RiskEngine ───────────────────────────────────────────────────────────────
 
 describe('RiskEngine', () => {
@@ -94,8 +97,8 @@ describe('RiskEngine', () => {
   })
 
   describe('token with empty fingerprint hashes', () => {
-    it('adds to score and may reach "challenge" or "block"', async () => {
-      // Arrange: empty canvas, webgl, and audio hashes → +25 +25 +20 = 70
+    it('adds 50 and reaches "challenge"', async () => {
+      // Arrange: empty canvas and webgl → +25 +25 = 50 (audio is no longer scored)
       const engine = new RiskEngine()
       const token = createMockToken({
         fingerprint: createMockFingerprint({
@@ -115,12 +118,11 @@ describe('RiskEngine', () => {
       // Act
       const decision = await engine.score(token)
 
-      // Assert: score >= 70 → 'block' or at minimum 'challenge'
-      expect(decision.score).toBeGreaterThanOrEqual(70)
-      expect(['challenge', 'block']).toContain(decision.decision)
+      expect(decision.score).toBe(50)
+      expect(decision.decision).toBe('challenge')
       expect(decision.reasons).toContain('canvas_fingerprint_empty_or_zero')
       expect(decision.reasons).toContain('webgl_fingerprint_empty')
-      expect(decision.reasons).toContain('audio_fingerprint_zero_or_empty')
+      expect(decision.reasons).not.toContain('audio_fingerprint_zero_or_empty')
     })
   })
 
@@ -149,8 +151,8 @@ describe('RiskEngine', () => {
   })
 
   describe('token with both bad fingerprint and no behavior', () => {
-    it('score exceeds 70 → "block"', async () => {
-      // Arrange: empty fingerprint (+70) + no behavior (+15) = 85
+    it('score reaches 70 → "block"', async () => {
+      // Arrange: empty fingerprint (+50) + hardwareConcurrency 0 (+5) + no behavior (+15) = 70
       const engine = new RiskEngine()
       const token = createMockToken({
         fingerprint: createMockFingerprint({
@@ -191,8 +193,8 @@ describe('RiskEngine', () => {
       // Act
       const decision = await engine.score(token)
 
-      // Assert: 25 + 25 + 20 + 5 + 15 = 90 → block
-      expect(decision.score).toBeGreaterThan(70)
+      // Assert: 25 + 25 + 5 + 15 = 70 → block (threshold is inclusive)
+      expect(decision.score).toBe(70)
       expect(decision.decision).toBe('block')
       expect(decision.instantBlock).toBe(false)
     })
@@ -373,64 +375,183 @@ describe('RiskEngine', () => {
       expect(decision.score).toBeGreaterThanOrEqual(10)
     })
 
-    it('returns instant block with token_timestamp_future when token has a future timestamp', async () => {
-      // Arrange: timestamp 10 seconds into the future — clocks don't run backward
+    it('does NOT block a token 20 s in the future (inside the acceptance window)', async () => {
       const engine = new RiskEngine()
-      const token = createMockToken({ timestamp: Date.now() + 10_000 })
+      const token = createMockToken({ timestamp: Date.now() + 20_000 })
 
-      // Act
       const decision = await engine.score(token)
 
-      // Assert: should be instant block
+      expect(decision.decision).not.toBe('block')
+      expect(decision.reasons).not.toContain('token_timestamp_future')
+      expect(decision.score).toBe(0)
+    })
+
+    it('instant blocks token_timestamp_future beyond the acceptance window', async () => {
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() + WINDOW + 10_000 })
+
+      const decision = await engine.score(token)
+
       expect(decision.decision).toBe('block')
       expect(decision.instantBlock).toBe(true)
       expect(decision.score).toBe(100)
       expect(decision.reasons).toContain('token_timestamp_future')
     })
 
-    it('does NOT instant block when future timestamp is within the 5000ms tolerance', async () => {
-      // Arrange: 4 seconds in the future — within the 5000ms grace window
+    it('scores +10 token_clock_skew (instead of token_too_old) for a token 10 minutes old', async () => {
       const engine = new RiskEngine()
-      const token = createMockToken({ timestamp: Date.now() + 4_000 })
+      const token = createMockToken({ timestamp: Date.now() - 600_000 })
 
-      // Act
       const decision = await engine.score(token)
 
-      // Assert: no instant block from future timestamp check
-      expect(decision.reasons).not.toContain('token_timestamp_future')
+      expect(decision.decision).toBe('allow')
+      expect(decision.score).toBe(10)
+      expect(decision.reasons).toEqual(['token_clock_skew'])
+    })
+
+    it('scores +10 token_clock_skew for a token 10 minutes in the future', async () => {
+      const engine = new RiskEngine()
+      const token = createMockToken({ timestamp: Date.now() + 600_000 })
+
+      const decision = await engine.score(token)
+
+      expect(decision.reasons).toEqual(['token_clock_skew'])
+      expect(decision.score).toBe(10)
     })
   })
 
-  describe('hard token expiry at 300 seconds', () => {
-    it('instant blocks with token_expired when token is older than 300 seconds', async () => {
-      // Arrange: timestamp 301 seconds in the past
+  describe('hard token expiry (acceptance window)', () => {
+    it('defaults the acceptance window to 1 hour', async () => {
       const engine = new RiskEngine()
-      const token = createMockToken({ timestamp: Date.now() - 301_000 })
+      const inside = await engine.score(createMockToken({ nonce: 'in', timestamp: Date.now() - (WINDOW - 5_000) }))
+      const outside = await engine.score(createMockToken({ nonce: 'out', timestamp: Date.now() - (WINDOW + 5_000) }))
 
-      // Act
-      const decision = await engine.score(token)
+      expect(inside.instantBlock).toBe(false)
+      expect(outside.reasons).toContain('token_expired')
+    })
 
-      // Assert: hard expiry triggers instant block
+    it('instant blocks token_expired for an older-than-window token whose nonce is NOT in the store', async () => {
+      const { MemoryStore } = await import('../src/store/memory.js')
+      const engine = new RiskEngine({ store: new MemoryStore() })
+      const token = createMockToken({ timestamp: Date.now() - (WINDOW + 10_000), nonce: 'never-seen' })
+
+      const decision = await engine.score(token, '1.2.3.4')
+
       expect(decision.decision).toBe('block')
       expect(decision.instantBlock).toBe(true)
       expect(decision.score).toBe(100)
       expect(decision.reasons).toContain('token_expired')
     })
 
-    it('does NOT instant block when token is exactly 300 seconds old (boundary: must be > 300s)', async () => {
-      // Arrange: exactly at the hard expiry boundary
-      const engine = new RiskEngine()
-      const token = createMockToken({ timestamp: Date.now() - 300_000 })
+    it('honours a custom maxTokenAbsoluteAgeMs for both window and nonce TTL', async () => {
+      const claimNonce = vi.fn().mockResolvedValue(true)
+      const store: FingerprintStore = {
+        saveFingerprint: vi.fn().mockResolvedValue(undefined),
+        getIPCount: vi.fn().mockResolvedValue(0),
+        claimNonce,
+      }
+      const engine = new RiskEngine({ store, maxTokenAbsoluteAgeMs: 120_000 })
 
-      // Act
-      const decision = await engine.score(token)
+      const decision = await engine.score(createMockToken({ timestamp: Date.now() - 130_000 }))
 
-      // Assert: 300_000ms is NOT > 300_000, so no hard expiry
-      expect(decision.reasons).not.toContain('token_expired')
+      expect(decision.reasons).toContain('token_expired')
+      expect(claimNonce).toHaveBeenCalledWith(expect.any(String), 125_000)
     })
   })
 
   describe('nonce replay protection', () => {
+    it('claims the nonce with TTL = acceptance window + 5000 ms', async () => {
+      const claimNonce = vi.fn().mockResolvedValue(true)
+      const store: FingerprintStore = {
+        saveFingerprint: vi.fn().mockResolvedValue(undefined),
+        getIPCount: vi.fn().mockResolvedValue(0),
+        claimNonce,
+      }
+      const engine = new RiskEngine({ store })
+
+      await engine.score(createMockToken({ nonce: 'ttl-check' }), '1.2.3.4')
+
+      expect(claimNonce).toHaveBeenCalledTimes(1)
+      expect(claimNonce).toHaveBeenCalledWith('ttl-check', WINDOW + 5_000)
+    })
+
+    it('blocks a replay at t=120 s and at t=30 min of a token that was 10 min old (inside window)', async () => {
+      vi.useFakeTimers()
+      try {
+        const { MemoryStore } = await import('../src/store/memory.js')
+        const engine = new RiskEngine({ store: new MemoryStore() })
+        const token = createMockToken({ nonce: 'skewed', timestamp: Date.now() - 600_000 })
+
+        const first = await engine.score(token, '1.2.3.4')
+        expect(first.decision).not.toBe('block')
+        expect(first.reasons).toContain('token_clock_skew')
+
+        vi.advanceTimersByTime(120_000)
+        const at120s = await engine.score(token, '1.2.3.4')
+        expect(at120s.decision).toBe('block')
+        expect(at120s.reasons).toContain('token_nonce_replayed')
+
+        vi.advanceTimersByTime(28 * 60_000)
+        const at30min = await engine.score(token, '1.2.3.4')
+        expect(at30min.decision).toBe('block')
+        expect(at30min.reasons.some((r) => r === 'token_nonce_replayed' || r === 'token_expired')).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a nonce never expires before its token stops being accepted', async () => {
+      vi.useFakeTimers()
+      try {
+        const { MemoryStore } = await import('../src/store/memory.js')
+        const engine = new RiskEngine({ store: new MemoryStore() })
+        const token = createMockToken({ nonce: 'edge', timestamp: Date.now() })
+
+        await engine.score(token, '1.2.3.4')
+        vi.advanceTimersByTime(WINDOW - 1_000) // token still inside the window
+        const replay = await engine.score(token, '1.2.3.4')
+        expect(replay.reasons).toContain('token_nonce_replayed')
+
+        vi.advanceTimersByTime(10_000) // now past the window: expired block, not an accept
+        const late = await engine.score(token, '1.2.3.4')
+        expect(late.decision).toBe('block')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('two concurrent scores with the same nonce yield exactly one non-replay', async () => {
+      const { MemoryStore } = await import('../src/store/memory.js')
+      const engine = new RiskEngine({ store: new MemoryStore() })
+      const token = createMockToken({ nonce: 'race' })
+
+      const results = await Promise.all([engine.score(token, '1.2.3.4'), engine.score(token, '1.2.3.4')])
+
+      const replays = results.filter((r) => r.reasons.includes('token_nonce_replayed'))
+      expect(replays).toHaveLength(1)
+    })
+
+    it('calls saveFingerprint exactly once per accepted token and never for instant blocks', async () => {
+      const saveFingerprint = vi.fn().mockResolvedValue(undefined)
+      const store: FingerprintStore = {
+        saveFingerprint,
+        getIPCount: vi.fn().mockResolvedValue(0),
+        claimNonce: vi.fn().mockResolvedValue(true),
+      }
+      const engine = new RiskEngine({ store })
+
+      await engine.score(createMockToken(), '1.2.3.4')
+      expect(saveFingerprint).toHaveBeenCalledTimes(1)
+
+      await engine.score(
+        createMockToken({
+          detection: createMockDetection({ isAutomated: true, signals: [{ name: 'webdriver_present', detected: true }] }),
+        }),
+        '1.2.3.4',
+      )
+      expect(saveFingerprint).toHaveBeenCalledTimes(1)
+    })
+
     it('instant blocks on the second call with the same nonce (replay detected)', async () => {
       // Arrange: store with nonce tracking
       const { MemoryStore } = await import('../src/store/memory.js')
@@ -469,12 +590,12 @@ describe('RiskEngine', () => {
       expect(decision2.reasons).not.toContain('token_nonce_replayed')
     })
 
-    it('does not perform nonce replay check when store has no hasSeenNonce method', async () => {
+    it('does not perform nonce replay check when store has no claimNonce method', async () => {
       // Arrange: plain store without nonce tracking
       const mockStore: FingerprintStore = {
         saveFingerprint: vi.fn().mockResolvedValue(undefined),
         getIPCount: vi.fn().mockResolvedValue(0),
-        // hasSeenNonce and saveNonce are NOT provided
+        // claimNonce is NOT provided
       }
       const engine = new RiskEngine({ store: mockStore })
       const token = createMockToken({ nonce: 'my-nonce' })

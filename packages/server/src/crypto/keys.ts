@@ -1,4 +1,4 @@
-import { generateKeyPairSync as _generateKeyPairSync, generateKeyPair as _generateKeyPair, createPrivateKey, type KeyObject } from 'node:crypto'
+import { generateKeyPairSync as _generateKeyPairSync, generateKeyPair as _generateKeyPair, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 export interface KeyPair {
@@ -55,16 +55,28 @@ export function loadKeyFromEnv(envVar: string): string {
   return value
 }
 
+function normalizePem(pem: string): string {
+  return pem.replace(/\\n/g, '\n')
+}
+
 export class KeyManager {
   private readonly _keys = new Map<number, { publicKey: string; privateKey: string; privateKeyObject: KeyObject }>()
   private _defaultKeyId = 0
 
   addKeyPair(keyId: number, publicKey: string, privateKey: string): void {
-    this._keys.set(keyId, {
-      publicKey,
-      privateKey,
-      privateKeyObject: createPrivateKey(privateKey),
-    })
+    if (!Number.isInteger(keyId) || keyId < 0 || keyId > 255) {
+      throw new Error(`KeyManager: keyId must be an integer from 0 to 255 (got ${keyId})`)
+    }
+    // Env vars and secret stores often carry PEMs with literal "\n" sequences
+    const publicPem = normalizePem(publicKey)
+    const privatePem = normalizePem(privateKey)
+    const privateKeyObject = createPrivateKey(privatePem)
+    const derivedPublic = createPublicKey(privateKeyObject).export({ type: 'spki', format: 'der' })
+    const givenPublic = createPublicKey(publicPem).export({ type: 'spki', format: 'der' })
+    if (!derivedPublic.equals(givenPublic)) {
+      throw new Error(`KeyManager: public key does not match private key for keyId ${keyId}`)
+    }
+    this._keys.set(keyId, { publicKey: publicPem, privateKey: privatePem, privateKeyObject })
   }
 
   setDefaultKeyId(keyId: number): void {

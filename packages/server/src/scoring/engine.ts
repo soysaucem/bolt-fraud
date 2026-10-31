@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Token, Decision, FingerprintStore } from '../model/types.js'
 import { scoreFingerprint } from './fingerprint.js'
 import { scoreAutomation } from './automation.js'
@@ -7,7 +8,12 @@ const DEFAULT_BLOCK_THRESHOLD = 70
 const DEFAULT_CHALLENGE_THRESHOLD = 30
 const DEFAULT_IP_COUNT_THRESHOLD = 100
 const DEFAULT_MAX_TOKEN_AGE_MS = 30_000
-const DEFAULT_MAX_TOKEN_ABSOLUTE_AGE_MS = 300_000
+/** Symmetric acceptance window around server time; also the base of the nonce claim TTL. */
+const DEFAULT_MAX_TOKEN_ABSOLUTE_AGE_MS = 3_600_000
+/** |age| beyond this (but inside the acceptance window) is treated as client clock skew. */
+const CLOCK_SKEW_THRESHOLD_MS = 300_000
+/** Extra nonce lifetime so a nonce never expires before its token stops being accepted. */
+const NONCE_TTL_SLACK_MS = 5_000
 
 export interface ScorerResult {
   readonly score: number
@@ -33,19 +39,23 @@ export interface RiskEngineConfig {
   readonly maxTokenAgeMs?: number
   readonly maxTokenAbsoluteAgeMs?: number
   readonly scorers?: readonly Scorer[]
+  /** Include the behavior scorer in the default scorer set. Default true. Ignored when `scorers` is given. */
+  readonly behaviorScoring?: boolean
 }
 
 /**
- * Compute a stable fingerprint hash from available canvas/webgl/audio hashes.
- * Avoids using empty string as a store key (which would conflate all blocked-canvas clients).
+ * Compute a stable fingerprint hash: first 32 hex chars of
+ * sha256(`${canvas.hash}|${webgl.renderer}|${screen.width}x${screen.height}`).
+ * Returns 'unknown' when both canvas hash and renderer are empty, so empty
+ * fingerprints never share a store key.
  */
 export function computeFingerprintHash(token: Token): string {
-  return (
-    token.fingerprint.canvas.hash ||
-    token.fingerprint.webgl.hash ||
-    token.fingerprint.audio.hash ||
-    'unknown'
-  )
+  const { canvas, webgl, screen } = token.fingerprint
+  if (canvas.hash === '' && webgl.renderer === '') return 'unknown'
+  return createHash('sha256')
+    .update(`${canvas.hash}|${webgl.renderer}|${screen.width}x${screen.height}`)
+    .digest('hex')
+    .slice(0, 32)
 }
 
 class AutomationScorer implements Scorer {
@@ -81,14 +91,21 @@ class TokenAgeScorer implements Scorer {
 
   readonly name = 'token_age'
   score(token: Token): ScorerResult {
-    const now = Date.now()
-    if (token.timestamp > now + 5000) {
-      return { score: 100, reasons: ['token_timestamp_future'], instantBlock: true }
-    }
-    if (now - token.timestamp > this._maxTokenAbsoluteAgeMs) {
+    const age = Date.now() - token.timestamp
+    const window = this._maxTokenAbsoluteAgeMs
+    // Hard blocks outside the acceptance window: the nonce claim only lives as long
+    // as the window, so a token older than that must never be accepted again.
+    if (age > window) {
       return { score: 100, reasons: ['token_expired'], instantBlock: true }
     }
-    if (now - token.timestamp > this._maxTokenAgeMs) {
+    if (age < -window) {
+      return { score: 100, reasons: ['token_timestamp_future'], instantBlock: true }
+    }
+    // Inside the window: large offsets are probably client clock skew — score only.
+    if (Math.abs(age) > CLOCK_SKEW_THRESHOLD_MS) {
+      return { score: 10, reasons: ['token_clock_skew'] }
+    }
+    if (age > this._maxTokenAgeMs) {
       return { score: 10, reasons: ['token_too_old'] }
     }
     return { score: 0, reasons: [] }
@@ -135,17 +152,18 @@ export class RiskEngine {
     this._scorers = config.scorers ?? [
       new AutomationScorer(),
       new FingerprintScorer(),
-      new BehaviorScorer(),
+      ...(config.behaviorScoring === false ? [] : [new BehaviorScorer()]),
       new TokenAgeScorer(this._maxTokenAgeMs, this._maxTokenAbsoluteAgeMs),
       new IPReputationScorer(this._ipCountThreshold),
     ]
   }
 
   async score(token: Token, clientIP?: string): Promise<Decision> {
-    // Nonce replay protection — check before any other scoring
-    if (this._store?.hasSeenNonce) {
-      const replayed = await this._store.hasSeenNonce(token.nonce)
-      if (replayed) {
+    // Nonce replay protection — atomic claim before any other scoring. The TTL outlives
+    // the acceptance window, so a nonce can never expire while its token is still accepted.
+    if (this._store?.claimNonce) {
+      const claimed = await this._store.claimNonce(token.nonce, this._maxTokenAbsoluteAgeMs + NONCE_TTL_SLACK_MS)
+      if (!claimed) {
         return {
           decision: 'block',
           score: 100,
@@ -162,23 +180,14 @@ export class RiskEngine {
     for (const scorer of this._scorers) {
       const result = await scorer.score(token, context)
       if (result.instantBlock) {
-        // Short-circuit on instant block — save nonce then return immediately
-        if (this._store?.saveNonce) {
-          await this._store.saveNonce(token.nonce, 60_000)
-        }
         return { decision: 'block', score: 100, instantBlock: true, reasons: [...result.reasons] }
       }
       totalScore += result.score
       allReasons.push(...result.reasons)
     }
 
-    // Save fingerprint + nonce after scoring
     if (clientIP && this._store) {
-      const fpHash = computeFingerprintHash(token)
-      await this._store.saveFingerprint(fpHash, clientIP)
-    }
-    if (this._store?.saveNonce) {
-      await this._store.saveNonce(token.nonce, 60_000)
+      await this._store.saveFingerprint(computeFingerprintHash(token), clientIP)
     }
 
     if (totalScore >= this._blockThreshold) {
@@ -189,5 +198,4 @@ export class RiskEngine {
     }
     return { decision: 'allow', score: totalScore, instantBlock: false, reasons: allReasons }
   }
-
 }

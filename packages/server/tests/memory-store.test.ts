@@ -189,58 +189,87 @@ describe('MemoryStore TTL expiration', () => {
 
 // ─── Nonce tracking ───────────────────────────────────────────────────────────
 
-describe('MemoryStore nonce tracking', () => {
-  it('hasSeenNonce returns false for a nonce that has never been saved', async () => {
+describe('MemoryStore nonce claims', () => {
+  it('claimNonce returns true for a nonce that has never been claimed', async () => {
     const store = new MemoryStore()
-
-    const seen = await store.hasSeenNonce('brand-new-nonce')
-
-    expect(seen).toBe(false)
+    expect(await store.claimNonce('brand-new-nonce', 60_000)).toBe(true)
   })
 
-  it('hasSeenNonce returns true after saveNonce is called', async () => {
+  it('claimNonce returns false on a second claim of the same nonce', async () => {
     const store = new MemoryStore()
-
-    await store.saveNonce('my-nonce', 60_000)
-    const seen = await store.hasSeenNonce('my-nonce')
-
-    expect(seen).toBe(true)
+    await store.claimNonce('my-nonce', 60_000)
+    expect(await store.claimNonce('my-nonce', 60_000)).toBe(false)
   })
 
-  it('hasSeenNonce returns false for a different nonce than the one saved', async () => {
+  it('claimNonce treats different nonces independently', async () => {
     const store = new MemoryStore()
-
-    await store.saveNonce('nonce-A', 60_000)
-    const seen = await store.hasSeenNonce('nonce-B')
-
-    expect(seen).toBe(false)
+    await store.claimNonce('nonce-A', 60_000)
+    expect(await store.claimNonce('nonce-B', 60_000)).toBe(true)
   })
 
-  it('hasSeenNonce returns false after nonce TTL has expired', async () => {
+  it('claimNonce returns true again after the TTL has expired', async () => {
     vi.useFakeTimers()
     const store = new MemoryStore()
 
-    await store.saveNonce('expiring-nonce', 100) // 100ms TTL
-    expect(await store.hasSeenNonce('expiring-nonce')).toBe(true)
-
-    vi.advanceTimersByTime(150) // past TTL
-    const seen = await store.hasSeenNonce('expiring-nonce')
+    await store.claimNonce('expiring-nonce', 100)
+    vi.advanceTimersByTime(150)
+    const claimed = await store.claimNonce('expiring-nonce', 100)
 
     vi.useRealTimers()
-    expect(seen).toBe(false)
+    expect(claimed).toBe(true)
   })
 
-  it('hasSeenNonce returns true before nonce TTL has expired', async () => {
+  it('claimNonce still returns false before the TTL has expired', async () => {
     vi.useFakeTimers()
     const store = new MemoryStore()
 
-    await store.saveNonce('fresh-nonce', 500) // 500ms TTL
-    vi.advanceTimersByTime(200) // only 200ms elapsed
-
-    const seen = await store.hasSeenNonce('fresh-nonce')
+    await store.claimNonce('fresh-nonce', 500)
+    vi.advanceTimersByTime(200)
+    const claimed = await store.claimNonce('fresh-nonce', 500)
 
     vi.useRealTimers()
-    expect(seen).toBe(true)
+    expect(claimed).toBe(false)
+  })
+
+  it('stays fast and never scans the whole map for 5000 live nonces', async () => {
+    const store = new MemoryStore()
+    for (let i = 0; i < 5000; i++) await store.claimNonce(`n-${i}`, 60_000)
+
+    // Spy on iteration of the backing map: eviction must stop at the first live head entry
+    const map = (store as unknown as { _seenNonces: Map<string, number> })._seenNonces
+    let visited = 0
+    const origIterator = map[Symbol.iterator].bind(map)
+    map[Symbol.iterator] = function* () {
+      for (const entry of origIterator()) {
+        visited++
+        yield entry
+      }
+    } as typeof map[typeof Symbol.iterator]
+
+    await store.claimNonce('one-more', 60_000)
+
+    expect(visited).toBeLessThanOrEqual(1)
+  })
+
+  it('caps the nonce map at 100k, evicting the oldest', async () => {
+    const store = new MemoryStore()
+    for (let i = 0; i < 100_001; i++) await store.claimNonce(`n-${i}`, 3_600_000)
+
+    expect(await store.claimNonce('n-0', 3_600_000)).toBe(true) // oldest was evicted
+    expect(await store.claimNonce('n-100000', 3_600_000)).toBe(false) // newest retained
+  })
+})
+
+describe('MemoryStore saveFingerprint in place', () => {
+  it('refreshes recency so a re-seen fingerprint is evicted last', async () => {
+    const store = new MemoryStore({ maxEntries: 2 })
+    await store.saveFingerprint('a', '1.1.1.1')
+    await store.saveFingerprint('b', '2.2.2.2')
+    await store.saveFingerprint('a', '3.3.3.3') // refresh a
+    await store.saveFingerprint('c', '4.4.4.4') // evicts b, not a
+
+    expect(await store.getIPCount('a')).toBe(2)
+    expect(await store.getIPCount('b')).toBe(0)
   })
 })
 
@@ -260,12 +289,12 @@ describe('MemoryStore close()', () => {
 
   it('close() clears all nonce state', async () => {
     const store = new MemoryStore()
-    await store.saveNonce('nonce-1', 60_000)
-    expect(await store.hasSeenNonce('nonce-1')).toBe(true)
+    await store.claimNonce('nonce-1', 60_000)
+    expect(await store.claimNonce('nonce-1', 60_000)).toBe(false)
 
     await store.close()
 
-    expect(await store.hasSeenNonce('nonce-1')).toBe(false)
+    expect(await store.claimNonce('nonce-1', 60_000)).toBe(true)
   })
 
   it('close() on an empty store does not throw', async () => {

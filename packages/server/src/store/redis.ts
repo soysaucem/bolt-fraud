@@ -4,8 +4,8 @@
  * Uses Redis Sets for fingerprint→IP mapping (with sliding TTL) and
  * Redis STRING with EX for nonce deduplication.
  *
- * ioredis is a peerDependency — never imported at the top level to keep
- * the server package zero-runtime-deps. Users must install ioredis themselves.
+ * ioredis is an optional peerDependency and is never imported by this package:
+ * pass your own ioredis-compatible client instance.
  *
  * Key layout:
  *   bf:fp:<fingerprintHash>   — Redis Set of IP addresses
@@ -15,10 +15,6 @@
  *   import { RedisStore } from '@soysaucem/bolt-fraud-server'
  *   import Redis from 'ioredis'
  *
- *   // Option A: pass a connection URL
- *   const store = new RedisStore('redis://localhost:6379')
- *
- *   // Option B: pass your own ioredis instance
  *   const redis = new Redis({ host: 'localhost', port: 6379 })
  *   const store = new RedisStore(redis)
  */
@@ -30,13 +26,18 @@ import type { FingerprintStore } from '../model/types.js'
 // We define only the subset of commands RedisStore needs. This keeps the type
 // safe while avoiding a hard import of ioredis types at build time.
 
+interface RedisPipeline {
+  sadd(key: string, member: string): RedisPipeline
+  expire(key: string, seconds: number): RedisPipeline
+  scard(key: string): RedisPipeline
+  exec(): Promise<Array<[Error | null, unknown]> | null>
+}
+
 interface RedisClient {
   scard(key: string): Promise<number>
-  sadd(key: string, member: string): Promise<number>
-  expire(key: string, seconds: number): Promise<number>
-  set(key: string, value: string, exFlag: 'EX', seconds: number): Promise<'OK' | null>
-  get(key: string): Promise<string | null>
-  quit(): Promise<'OK'>
+  srem(key: string, member: string): Promise<number>
+  set(key: string, value: string, pxFlag: 'PX', ms: number, nxFlag: 'NX'): Promise<'OK' | null>
+  multi(): RedisPipeline
 }
 
 // ─── Options ─────────────────────────────────────────────────────────────────
@@ -71,58 +72,44 @@ const DEFAULT_KEY_PREFIX = 'bf:'
 /**
  * Redis-backed implementation of FingerprintStore.
  *
- * Pass either:
- *   - A connection URL string: `new RedisStore('redis://localhost:6379')`
- *     (RedisStore owns the connection and will quit on close())
- *   - An existing ioredis instance: `new RedisStore(redisClient)`
- *     (RedisStore borrows the connection and will NOT quit on close())
+ * Pass an existing ioredis-compatible client: `new RedisStore(redisClient)`.
+ * RedisStore borrows the connection and never closes it; the caller owns its lifecycle.
  */
 export class RedisStore implements FingerprintStore {
   private readonly _redis: RedisClient
-  private readonly _ownConnection: boolean
   private readonly _fingerprintTtlSeconds: number
   private readonly _ipSetCap: number
   private readonly _fpPrefix: string   // e.g. "bf:fp:"
   private readonly _noncePrefix: string // e.g. "bf:nonce:"
 
-  constructor(redisOrUrl: RedisClient | string, options?: RedisStoreOptions) {
+  constructor(redis: RedisClient, options?: RedisStoreOptions) {
     const fingerprintTtlMs = options?.fingerprintTtlMs ?? DEFAULT_FINGERPRINT_TTL_MS
     this._fingerprintTtlSeconds = Math.max(1, Math.ceil(fingerprintTtlMs / 1000))
     this._ipSetCap = options?.ipSetCap ?? DEFAULT_IP_SET_CAP
     const prefix = options?.keyPrefix ?? DEFAULT_KEY_PREFIX
     this._fpPrefix = `${prefix}fp:`
     this._noncePrefix = `${prefix}nonce:`
-
-    if (typeof redisOrUrl === 'string') {
-      // Dynamically require ioredis so the server package stays zero-runtime-deps
-      // at import time. Users must have ioredis installed as a peer dep.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { default: Redis } = require('ioredis') as { default: new (url: string) => RedisClient }
-      this._redis = new Redis(redisOrUrl)
-      this._ownConnection = true
-    } else {
-      this._redis = redisOrUrl
-      this._ownConnection = false
-    }
+    this._redis = redis
   }
 
   /**
    * Record that `ip` was seen presenting `fingerprintHash`.
    *
-   * - If the Set for `fingerprintHash` has not reached `ipSetCap`, adds `ip`.
-   * - Always refreshes the Set's TTL (sliding window).
+   * One MULTI round trip: SADD, EXPIRE (sliding TTL), SCARD. If SCARD reports the Set
+   * above `ipSetCap`, the member just added is removed again (rare, extra round trip).
    */
   async saveFingerprint(fingerprintHash: string, ip: string): Promise<void> {
     const key = `${this._fpPrefix}${fingerprintHash}`
-
-    // Check current cardinality BEFORE adding — avoids unbounded growth
-    const count = await this._redis.scard(key)
-
-    if (count < this._ipSetCap) {
-      await this._redis.sadd(key, ip)
+    const results = await this._redis
+      .multi()
+      .sadd(key, ip)
+      .expire(key, this._fingerprintTtlSeconds)
+      .scard(key)
+      .exec()
+    const count = results?.[2]?.[1]
+    if (typeof count === 'number' && count > this._ipSetCap) {
+      await this._redis.srem(key, ip)
     }
-    // Always refresh the TTL so active fingerprints don't expire mid-session
-    await this._redis.expire(key, this._fingerprintTtlSeconds)
   }
 
   /**
@@ -135,35 +122,12 @@ export class RedisStore implements FingerprintStore {
   }
 
   /**
-   * Returns true if `nonce` has been seen before (i.e. the key exists in Redis).
-   * Used to prevent token replay attacks.
+   * Atomically claim `nonce` (`SET key 1 PX ttl NX`). Resolves true when this call
+   * created the key, false when it already existed (replay).
    */
-  async hasSeenNonce(nonce: string): Promise<boolean> {
+  async claimNonce(nonce: string, ttlMs: number): Promise<boolean> {
     const key = `${this._noncePrefix}${nonce}`
-    const value = await this._redis.get(key)
-    return value !== null
-  }
-
-  /**
-   * Persist `nonce` with an expiry of `ttlMs` milliseconds.
-   * TTL is rounded up to the nearest second (minimum 1s) because Redis EX is
-   * an integer.
-   */
-  async saveNonce(nonce: string, ttlMs: number): Promise<void> {
-    const key = `${this._noncePrefix}${nonce}`
-    const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000))
-    await this._redis.set(key, '1', 'EX', ttlSeconds)
-  }
-
-  /**
-   * Close the Redis connection.
-   * Only calls `redis.quit()` if RedisStore owns the connection (created from a
-   * URL string). If the caller passed their own ioredis instance, they are
-   * responsible for closing it.
-   */
-  async close(): Promise<void> {
-    if (this._ownConnection) {
-      await this._redis.quit()
-    }
+    const res = await this._redis.set(key, '1', 'PX', Math.max(1, Math.ceil(ttlMs)), 'NX')
+    return res === 'OK'
   }
 }
