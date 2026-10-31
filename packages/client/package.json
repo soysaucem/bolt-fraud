@@ -1,6 +1,6 @@
 {
   "name": "@soysaucem/bolt-fraud-client",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Browser-side anti-bot detection SDK",
   "type": "module",
   "main": "./dist/index.cjs",
