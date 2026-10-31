@@ -105,10 +105,6 @@ jobs:
       - name: Test Express adapter
         run: npm test -w packages/adapter-express
 
-      # Build all
-      - name: Build all packages
-        run: npm run build
-
       # Bump versions in all packages
       - name: Bump versions
         run: |
@@ -117,6 +113,10 @@ jobs:
           NEW_VERSION=$(npm version "$BUMP_TYPE" --no-git-tag-version --workspaces --include-workspace-root 2>/dev/null | grep '^v' | head -1 | sed 's/^v//')
           echo "NEW_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
           echo "New version: $NEW_VERSION"
+
+      # Build all
+      - name: Build all packages
+        run: npm run build
 
       # Verify publishable artifacts
       - name: Pack client
