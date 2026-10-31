@@ -18,13 +18,17 @@ export const BoltFraudDecision = createParamDecorator(
 )
 
 /**
- * Method decorator that combines @UseGuards(BoltFraudGuard).
+ * Class or method decorator that applies @UseGuards(BoltFraudGuard).
  *
  * Usage:
  *   @Get()
  *   @BoltFraudProtected()
  *   handler() { ... }
+ *
+ *   @BoltFraudProtected()
+ *   @Controller('orders')
+ *   class OrdersController { ... }
  */
-export function BoltFraudProtected(): MethodDecorator {
+export function BoltFraudProtected(): ClassDecorator & MethodDecorator {
   return applyDecorators(UseGuards(BoltFraudGuard))
 }

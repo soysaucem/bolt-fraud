@@ -1,6 +1,6 @@
-export { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_OPTIONS, BOLT_FRAUD_TOKEN_HEADER } from './tokens.js'
+export { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_OPTIONS, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_GUARD_OPTIONS } from './tokens.js'
 export { BoltFraudModule, type BoltFraudModuleConfig } from './bolt-fraud.module.js'
-export { BoltFraudGuard } from './bolt-fraud.guard.js'
+export { BoltFraudGuard, type BoltFraudGuardOptions } from './bolt-fraud.guard.js'
 export { BoltFraudDecision, BoltFraudProtected } from './bolt-fraud.decorator.js'
 
 // Re-export key types from @soysaucem/bolt-fraud-server for convenience

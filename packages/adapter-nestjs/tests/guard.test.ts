@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import { webcrypto } from 'node:crypto'
 import { HttpException, HttpStatus } from '@nestjs/common'
+import { createBoltFraud, generateKeyPairSync } from '@soysaucem/bolt-fraud-server'
 import { BoltFraudGuard } from '../src/bolt-fraud.guard.js'
 import {
   createMockExecutionContext,
@@ -7,6 +9,9 @@ import {
   createAllowDecision,
   createBlockDecision,
   createChallengeDecision,
+  createMockToken,
+  serializeToken,
+  type Token,
   type MockRequest,
 } from './helpers.js'
 
@@ -207,19 +212,36 @@ describe('BoltFraudGuard', () => {
     }
   })
 
-  it('returns 403 with verification_error when boltFraud.verify() throws', async () => {
-    // Arrange: verify() throws — guard should catch and return 403 with verification_error reason
+  it('fails open by default when verify() throws: calls onError and allows with verification_error', async () => {
     const mockBoltFraud = createMockBoltFraud()
     const verifyError = new Error('decrypt_failed: corrupted ciphertext')
     vi.spyOn(mockBoltFraud, 'verify').mockRejectedValue(verifyError)
-    const guard = new BoltFraudGuard(mockBoltFraud as any, 'x-client-data')
+    const onError = vi.fn()
+    const guard = new BoltFraudGuard(mockBoltFraud as any, 'x-client-data', { onError })
+    const request: MockRequest = {
+      headers: { 'x-client-data': 'malformed-token' },
+      ip: '1.2.3.4',
+    }
+
+    const result = await guard.canActivate(createMockExecutionContext(request))
+
+    expect(result).toBe(true)
+    expect(onError).toHaveBeenCalledWith(verifyError)
+    expect(request.boltFraudDecision?.reasons).toEqual(['verification_error'])
+  })
+
+  it('returns 403 with verification_error when verify() throws and failOpen is false', async () => {
+    const mockBoltFraud = createMockBoltFraud()
+    const verifyError = new Error('decrypt_failed: corrupted ciphertext')
+    vi.spyOn(mockBoltFraud, 'verify').mockRejectedValue(verifyError)
+    const onError = vi.fn()
+    const guard = new BoltFraudGuard(mockBoltFraud as any, 'x-client-data', { failOpen: false, onError })
     const request: MockRequest = {
       headers: { 'x-client-data': 'malformed-token' },
       ip: '1.2.3.4',
     }
     const ctx = createMockExecutionContext(request)
 
-    // Act & Assert: guard catches the error and throws 403 HttpException
     try {
       await guard.canActivate(ctx)
       expect.fail('should have thrown')
@@ -229,5 +251,58 @@ describe('BoltFraudGuard', () => {
       const response = (e as HttpException).getResponse() as Record<string, unknown>
       expect(response.reason).toBe('verification_error')
     }
+    expect(onError).toHaveBeenCalledWith(verifyError)
+  })
+
+  it("throws 403 missing_token when missingToken is 'block'", async () => {
+    const guard = new BoltFraudGuard(createMockBoltFraud() as any, 'x-client-data', { missingToken: 'block' })
+    const request: MockRequest = { headers: {} }
+
+    await expect(guard.canActivate(createMockExecutionContext(request))).rejects.toMatchObject({
+      status: HttpStatus.FORBIDDEN,
+      response: { decision: 'block', reason: 'missing_token' },
+    })
+  })
+})
+
+// ─── Real instance: createBoltFraud + real client-format encrypted token ─────────
+
+describe('BoltFraudGuard with a real createBoltFraud instance', () => {
+  async function encryptToken(publicKeyPem: string, token: Token): Promise<string> {
+    const pem = publicKeyPem.replace(/-----[A-Z ]+-----/g, '').replace(/\s+/g, '')
+    const key = await webcrypto.subtle.importKey(
+      'spki',
+      Buffer.from(pem, 'base64'),
+      { name: 'RSA-OAEP', hash: 'SHA-256' },
+      false,
+      ['encrypt'],
+    )
+    const aes = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt'])
+    const iv = webcrypto.getRandomValues(new Uint8Array(12))
+    const plaintext = serializeToken(token)
+    const ciphertext = new Uint8Array(await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, aes, plaintext))
+    const wrapped = new Uint8Array(
+      await webcrypto.subtle.encrypt({ name: 'RSA-OAEP' }, key, await webcrypto.subtle.exportKey('raw', aes)),
+    )
+    const header = Buffer.from([0, (wrapped.length >> 8) & 0xff, wrapped.length & 0xff])
+    return Buffer.concat([header, wrapped, iv, ciphertext]).toString('base64url')
+  }
+
+  it('allows a valid encrypted token and blocks a garbled one', async () => {
+    const keys = generateKeyPairSync()
+    const bf = createBoltFraud({ privateKeyPem: keys.privateKey, publicKeyPem: keys.publicKey })
+    const guard = new BoltFraudGuard(bf, 'x-client-data')
+
+    const good: MockRequest = {
+      headers: { 'x-client-data': await encryptToken(keys.publicKey, createMockToken()) },
+      ip: '1.2.3.4',
+    }
+    expect(await guard.canActivate(createMockExecutionContext(good))).toBe(true)
+    expect(good.boltFraudDecision?.decision).toBe('allow')
+
+    const bad: MockRequest = { headers: { 'x-client-data': 'AAAA' }, ip: '1.2.3.4' }
+    await expect(guard.canActivate(createMockExecutionContext(bad))).rejects.toMatchObject({
+      status: HttpStatus.FORBIDDEN,
+    })
   })
 })

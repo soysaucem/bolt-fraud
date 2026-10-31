@@ -1,6 +1,9 @@
+import 'reflect-metadata'
 import { describe, it, expect } from 'vitest'
+import { Module, Injectable, Inject } from '@nestjs/common'
+import { NestFactory } from '@nestjs/core'
 import { BoltFraudModule } from '../src/bolt-fraud.module.js'
-import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_OPTIONS } from '../src/tokens.js'
+import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_OPTIONS, BOLT_FRAUD_GUARD_OPTIONS } from '../src/tokens.js'
 import { BoltFraudGuard } from '../src/bolt-fraud.guard.js'
 
 describe('BoltFraudModule', () => {
@@ -155,6 +158,71 @@ describe('BoltFraudModule', () => {
         (p: any) => p.provide === BOLT_FRAUD_OPTIONS,
       )
       expect(optionsProvider.inject).toEqual([])
+    })
+  })
+
+  describe('header and options normalisation', () => {
+    it("lower-cases tokenHeader in forRoot ('X-Client-Data' → 'x-client-data')", () => {
+      const result = BoltFraudModule.forRoot({ tokenHeader: 'X-Client-Data' })
+
+      const headerProvider = (result.providers as any[])?.find((p: any) => p.provide === BOLT_FRAUD_TOKEN_HEADER)
+      expect(headerProvider.useValue).toBe('x-client-data')
+    })
+
+    it('lower-cases tokenHeader in forRootAsync', () => {
+      const result = BoltFraudModule.forRootAsync({ useFactory: () => ({}) })
+
+      const headerProvider = (result.providers as any[])?.find((p: any) => p.provide === BOLT_FRAUD_TOKEN_HEADER)
+      expect(headerProvider.useFactory({ tokenHeader: 'X-Client-Data' })).toBe('x-client-data')
+      expect(headerProvider.useFactory({})).toBe('x-client-data')
+    })
+
+    it('passes imports through forRootAsync', () => {
+      class SomeModule {}
+      const result = BoltFraudModule.forRootAsync({ imports: [SomeModule], useFactory: () => ({}) })
+
+      expect(result.imports).toEqual([SomeModule])
+    })
+
+    it('exposes missingToken, failOpen and onError to the guard options provider', () => {
+      const onError = () => {}
+      const result = BoltFraudModule.forRoot({ missingToken: 'block', failOpen: false, onError })
+
+      const provider = (result.providers as any[])?.find((p: any) => p.provide === BOLT_FRAUD_GUARD_OPTIONS)
+      expect(provider.useValue).toEqual({ missingToken: 'block', failOpen: false, onError })
+    })
+  })
+
+  describe('forRootAsync with imports resolves in a real Nest container', () => {
+    it('injects a provider exported by an imported module into the factory', async () => {
+      @Injectable()
+      class ConfigService {
+        get tokenHeader(): string {
+          return 'X-From-Config'
+        }
+      }
+
+      @Module({ providers: [ConfigService], exports: [ConfigService] })
+      class ConfigModule {}
+
+      @Module({
+        imports: [
+          BoltFraudModule.forRootAsync({
+            imports: [ConfigModule],
+            inject: [ConfigService],
+            useFactory: (config: unknown) => ({ tokenHeader: (config as ConfigService).tokenHeader }),
+          }),
+        ],
+      })
+      class AppModule {}
+
+      const app = await NestFactory.createApplicationContext(AppModule, { logger: false })
+      try {
+        expect(app.get(BOLT_FRAUD_TOKEN_HEADER)).toBe('x-from-config')
+        expect(typeof app.get(BOLT_FRAUD_INSTANCE).verify).toBe('function')
+      } finally {
+        await app.close()
+      }
     })
   })
 })

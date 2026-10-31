@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect } from 'vitest'
 import { BoltFraudDecision, BoltFraudProtected } from '../src/bolt-fraud.decorator.js'
+import { BoltFraudGuard } from '../src/bolt-fraud.guard.js'
 import { createMockExecutionContext, createAllowDecision, type MockRequest } from './helpers.js'
 
 // NestJS internal metadata key used by createParamDecorator
@@ -78,5 +79,21 @@ describe('BoltFraudProtected decorator', () => {
   it('returns a decorator function', () => {
     const decorator = BoltFraudProtected()
     expect(typeof decorator).toBe('function')
+  })
+
+  it('applies BoltFraudGuard when used as a class decorator', () => {
+    @BoltFraudProtected()
+    class Controller {}
+
+    expect(Reflect.getMetadata('__guards__', Controller)).toEqual([BoltFraudGuard])
+  })
+
+  it('applies BoltFraudGuard when used as a method decorator', () => {
+    class Controller {
+      @BoltFraudProtected()
+      handler() {}
+    }
+
+    expect(Reflect.getMetadata('__guards__', Controller.prototype.handler)).toEqual([BoltFraudGuard])
   })
 })

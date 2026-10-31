@@ -36,8 +36,27 @@ describe('boltFraudMiddleware', () => {
 
   // ── 1. Missing token ────────────────────────────────────────────────────────
 
-  it('responds 403 with missing_token when no token header is present', async () => {
+  it('allows with a missing_token decision when no token header is present (default)', async () => {
     const middleware = createMiddleware()
+    const req = createMockRequest({ headers: {} })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    await middleware(asRequest(req), asResponse(res), next)
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(res.status).not.toHaveBeenCalled()
+    expect(req.boltFraudDecision).toEqual({
+      decision: 'allow',
+      score: 0,
+      instantBlock: false,
+      reasons: ['missing_token'],
+    })
+    expect(mockBoltFraud.verify).not.toHaveBeenCalled()
+  })
+
+  it("responds 403 with missing_token when missingToken is 'block'", async () => {
+    const middleware = createMiddleware({ missingToken: 'block' })
     const req = createMockRequest({ headers: {} })
     const res = createMockResponse()
     const next = createMockNext()
@@ -51,7 +70,7 @@ describe('boltFraudMiddleware', () => {
 
   // ── 2. Empty token ──────────────────────────────────────────────────────────
 
-  it('responds 403 with missing_token when token header is an empty string', async () => {
+  it('treats an empty token header as missing (allow by default)', async () => {
     const middleware = createMiddleware()
     const req = createMockRequest({ headers: { 'x-client-data': '' } })
     const res = createMockResponse()
@@ -59,9 +78,8 @@ describe('boltFraudMiddleware', () => {
 
     await middleware(asRequest(req), asResponse(res), next)
 
-    expect(res.statusCode).toBe(403)
-    expect(res.body).toEqual({ error: 'missing_token' })
-    expect(next).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledOnce()
+    expect(req.boltFraudDecision?.reasons).toEqual(['missing_token'])
   })
 
   // ── 3. Token too large ──────────────────────────────────────────────────────
@@ -197,18 +215,79 @@ describe('boltFraudMiddleware', () => {
 
   // ── 9. verify() throws ──────────────────────────────────────────────────────
 
-  it('responds 403 with verification_error when verify() throws', async () => {
-    mockBoltFraud.verify.mockRejectedValue(new Error('decrypt failed'))
-    const middleware = createMiddleware()
+  it('fails open by default: reports to onError and continues with verification_error', async () => {
+    const boom = new Error('redis down')
+    mockBoltFraud.verify.mockRejectedValue(boom)
+    const onError = vi.fn()
+    const middleware = createMiddleware({ onError })
+    const req = createMockRequest({ headers: { 'x-client-data': 'some-token' }, ip: '4.4.4.4' })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    await middleware(asRequest(req), asResponse(res), next)
+
+    expect(onError).toHaveBeenCalledWith(boom)
+    expect(next).toHaveBeenCalledWith()
+    expect(res.status).not.toHaveBeenCalled()
+    expect(req.boltFraudDecision?.reasons).toEqual(['verification_error'])
+  })
+
+  it('responds 403 with verification_error when verify() throws and failOpen is false', async () => {
+    const boom = new Error('decrypt failed')
+    mockBoltFraud.verify.mockRejectedValue(boom)
+    const onError = vi.fn()
+    const middleware = createMiddleware({ failOpen: false, onError })
     const req = createMockRequest({ headers: { 'x-client-data': 'corrupted-token' }, ip: '4.4.4.4' })
     const res = createMockResponse()
     const next = createMockNext()
 
     await middleware(asRequest(req), asResponse(res), next)
 
+    expect(onError).toHaveBeenCalledWith(boom)
     expect(res.statusCode).toBe(403)
     expect(res.body).toEqual({ error: 'verification_error' })
     expect(next).not.toHaveBeenCalled()
+  })
+
+  it('forwards an error thrown by onBlock to next(err) without an unhandled rejection', async () => {
+    mockBoltFraud.verify.mockResolvedValue(createBlockDecision())
+    const handlerError = new Error('onBlock exploded')
+    const middleware = createMiddleware({
+      onBlock: () => {
+        throw handlerError
+      },
+    })
+    const req = createMockRequest({ headers: { 'x-client-data': 'bot-token' }, ip: '4.4.4.4' })
+    const res = createMockResponse()
+    const next = createMockNext()
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+
+    try {
+      await middleware(asRequest(req), asResponse(res), next)
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+
+    expect(next).toHaveBeenCalledWith(handlerError)
+    expect(unhandled).not.toHaveBeenCalled()
+  })
+
+  it('forwards an error thrown by onChallenge to next(err)', async () => {
+    mockBoltFraud.verify.mockResolvedValue(createChallengeDecision())
+    const handlerError = new Error('onChallenge exploded')
+    const middleware = createMiddleware({
+      onChallenge: () => {
+        throw handlerError
+      },
+    })
+    const req = createMockRequest({ headers: { 'x-client-data': 'tok' } })
+    const next = createMockNext()
+
+    await middleware(asRequest(req), asResponse(createMockResponse()), next)
+
+    expect(next).toHaveBeenCalledWith(handlerError)
   })
 
   // ── 10. Custom tokenHeader ──────────────────────────────────────────────────
@@ -230,7 +309,7 @@ describe('boltFraudMiddleware', () => {
     expect(next).toHaveBeenCalledOnce()
   })
 
-  it('responds 403 with missing_token when custom tokenHeader is absent', async () => {
+  it('treats the token as missing when the custom tokenHeader is absent', async () => {
     const middleware = createMiddleware({ tokenHeader: 'x-my-token' })
     // Sends default header — not the custom one
     const req = createMockRequest({ headers: { 'x-client-data': 'wrong-header' } })
@@ -239,9 +318,19 @@ describe('boltFraudMiddleware', () => {
 
     await middleware(asRequest(req), asResponse(res), next)
 
-    expect(res.statusCode).toBe(403)
-    expect(res.body).toEqual({ error: 'missing_token' })
-    expect(next).not.toHaveBeenCalled()
+    expect(mockBoltFraud.verify).not.toHaveBeenCalled()
+    expect(req.boltFraudDecision?.reasons).toEqual(['missing_token'])
+    expect(next).toHaveBeenCalledOnce()
+  })
+
+  it("finds a lowercase incoming header when tokenHeader is configured as 'X-Client-Data'", async () => {
+    const middleware = createMiddleware({ tokenHeader: 'X-Client-Data' })
+    const req = createMockRequest({ headers: { 'x-client-data': 'cased-token' }, ip: '5.5.5.5' })
+    const next = createMockNext()
+
+    await middleware(asRequest(req), asResponse(createMockResponse()), next)
+
+    expect(mockBoltFraud.verify).toHaveBeenCalledWith('cased-token', '5.5.5.5')
   })
 
   // ── 11. IP fallback to socket.remoteAddress ─────────────────────────────────

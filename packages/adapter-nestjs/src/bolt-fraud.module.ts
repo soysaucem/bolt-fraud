@@ -1,10 +1,31 @@
 import { Module, type DynamicModule, type Provider } from '@nestjs/common'
-import { createBoltFraud, type BoltFraudServerConfig, type BoltFraud } from '@soysaucem/bolt-fraud-server'
-import { BoltFraudGuard } from './bolt-fraud.guard.js'
-import { BOLT_FRAUD_INSTANCE, BOLT_FRAUD_OPTIONS, BOLT_FRAUD_TOKEN_HEADER } from './tokens.js'
+import { createBoltFraud, type BoltFraudServerConfig } from '@soysaucem/bolt-fraud-server'
+import { BoltFraudGuard, type BoltFraudGuardOptions } from './bolt-fraud.guard.js'
+import {
+  BOLT_FRAUD_INSTANCE,
+  BOLT_FRAUD_OPTIONS,
+  BOLT_FRAUD_TOKEN_HEADER,
+  BOLT_FRAUD_GUARD_OPTIONS,
+} from './tokens.js'
 
-export interface BoltFraudModuleConfig extends BoltFraudServerConfig {
+const DEFAULT_TOKEN_HEADER = 'x-client-data'
+
+/**
+ * Module configuration. `onError` (inherited from the server config) receives both token
+ * decryption failures and errors thrown by verify().
+ */
+export interface BoltFraudModuleConfig extends BoltFraudServerConfig, BoltFraudGuardOptions {
+  /** Header carrying the token. Matched case-insensitively. Default: 'x-client-data' */
   readonly tokenHeader?: string
+}
+
+/** Node lower-cases incoming header names, so the configured name must be lower-cased too. */
+function resolveTokenHeader(config: BoltFraudModuleConfig): string {
+  return (config.tokenHeader ?? DEFAULT_TOKEN_HEADER).toLowerCase()
+}
+
+function resolveGuardOptions(config: BoltFraudModuleConfig): BoltFraudGuardOptions {
+  return { missingToken: config.missingToken, failOpen: config.failOpen, onError: config.onError }
 }
 
 @Module({})
@@ -17,18 +38,25 @@ export class BoltFraudModule {
 
     const tokenHeaderProvider: Provider = {
       provide: BOLT_FRAUD_TOKEN_HEADER,
-      useValue: config.tokenHeader ?? 'x-client-data',
+      useValue: resolveTokenHeader(config),
+    }
+
+    const guardOptionsProvider: Provider = {
+      provide: BOLT_FRAUD_GUARD_OPTIONS,
+      useValue: resolveGuardOptions(config),
     }
 
     return {
       module: BoltFraudModule,
       global: true,
-      providers: [boltFraudProvider, tokenHeaderProvider, BoltFraudGuard],
-      exports: [BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BoltFraudGuard],
+      providers: [boltFraudProvider, tokenHeaderProvider, guardOptionsProvider, BoltFraudGuard],
+      exports: [BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_GUARD_OPTIONS, BoltFraudGuard],
     }
   }
 
   static forRootAsync(options: {
+    /** Modules whose providers the factory's `inject` tokens come from (e.g. ConfigModule). */
+    imports?: DynamicModule['imports']
     useFactory: (...args: unknown[]) => BoltFraudModuleConfig | Promise<BoltFraudModuleConfig>
     inject?: readonly (string | symbol | (abstract new (...args: unknown[]) => unknown))[]
   }): DynamicModule {
@@ -46,15 +74,22 @@ export class BoltFraudModule {
 
     const tokenHeaderProvider: Provider = {
       provide: BOLT_FRAUD_TOKEN_HEADER,
-      useFactory: (config: BoltFraudModuleConfig) => config.tokenHeader ?? 'x-client-data',
+      useFactory: resolveTokenHeader,
+      inject: [BOLT_FRAUD_OPTIONS],
+    }
+
+    const guardOptionsProvider: Provider = {
+      provide: BOLT_FRAUD_GUARD_OPTIONS,
+      useFactory: resolveGuardOptions,
       inject: [BOLT_FRAUD_OPTIONS],
     }
 
     return {
       module: BoltFraudModule,
       global: true,
-      providers: [configProvider, boltFraudProvider, tokenHeaderProvider, BoltFraudGuard],
-      exports: [BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BoltFraudGuard],
+      imports: options.imports ? [...options.imports] : [],
+      providers: [configProvider, boltFraudProvider, tokenHeaderProvider, guardOptionsProvider, BoltFraudGuard],
+      exports: [BOLT_FRAUD_INSTANCE, BOLT_FRAUD_TOKEN_HEADER, BOLT_FRAUD_GUARD_OPTIONS, BoltFraudGuard],
     }
   }
 }
