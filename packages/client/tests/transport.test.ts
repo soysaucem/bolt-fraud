@@ -12,7 +12,7 @@ import type { BoltFraudConfig } from '../src/types.js'
 describe('buildToken', () => {
   const devConfig: BoltFraudConfig = {
     serverUrl: 'https://example.com',
-    // No publicKey → dev mode: returns base64url-encoded plaintext
+    devMode: true, // no publicKey: returns base64url-encoded plaintext
   }
 
   // ── Return shape ─────────────────────────────────────────────────────────────

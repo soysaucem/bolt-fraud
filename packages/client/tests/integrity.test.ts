@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { isNativeFunction, validateIntegrity } from '../src/detection/integrity.js'
 
 // ─── isNativeFunction ─────────────────────────────────────────────────────────
@@ -176,5 +176,89 @@ describe('validateIntegrity', () => {
     expect(result.isValid).toBe(false)
     const violationNames = result.violations.map((v) => v.name)
     expect(violationNames).toContain('performance_now_overridden')
+  })
+
+  // ── Prototype chain ─────────────────────────────────────────────────────────
+
+  describe('Window → EventTarget prototype chain', () => {
+    const windowProto = Window.prototype
+    const original = Object.getPrototypeOf(windowProto) as object
+
+    afterEach(() => {
+      Object.setPrototypeOf(windowProto, original)
+    })
+
+    it('is valid in the default environment', async () => {
+      const result = await validateIntegrity()
+      expect(result.violations.map((v) => v.name)).not.toContain('window_event_target_chain_broken')
+    })
+
+    it('accepts intermediate prototypes (Chromium WindowProperties)', async () => {
+      const windowProperties = Object.create(EventTarget.prototype) as object
+      Object.setPrototypeOf(windowProto, windowProperties)
+
+      const result = await validateIntegrity()
+      expect(result.violations.map((v) => v.name)).not.toContain('window_event_target_chain_broken')
+    })
+
+    it('accepts two intermediate prototypes (three hops)', async () => {
+      const a = Object.create(EventTarget.prototype) as object
+      const b = Object.create(a) as object
+      Object.setPrototypeOf(windowProto, b)
+
+      const result = await validateIntegrity()
+      expect(result.violations.map((v) => v.name)).not.toContain('window_event_target_chain_broken')
+    })
+
+    it('flags a chain that never reaches EventTarget.prototype', async () => {
+      Object.setPrototypeOf(windowProto, Object.prototype)
+
+      const result = await validateIntegrity()
+      expect(result.violations.map((v) => v.name)).toContain('window_event_target_chain_broken')
+    })
+
+    it('flags a chain that reaches EventTarget only after too many hops', async () => {
+      let proto: object = EventTarget.prototype
+      for (let i = 0; i < 3; i++) proto = Object.create(proto) as object
+      Object.setPrototypeOf(windowProto, proto)
+
+      const result = await validateIntegrity()
+      expect(result.violations.map((v) => v.name)).toContain('window_event_target_chain_broken')
+    })
+  })
+
+  // ── Function.prototype.toString capture ─────────────────────────────────────
+
+  describe('Function.prototype.toString capture', () => {
+    const realToString = Function.prototype.toString
+
+    afterEach(() => {
+      Function.prototype.toString = realToString
+      vi.resetModules()
+    })
+
+    it('patching toString after load does not flag it and does not break the native checks', async () => {
+      Function.prototype.toString = function patched(): string {
+        return 'function () {}'
+      }
+
+      const result = await validateIntegrity()
+      const names = result.violations.map((v) => v.name)
+      expect(names).not.toContain('native_function_toString_overridden')
+      expect(isNativeFunction(Array.prototype.push)).toBe(true)
+      expect(isNativeFunction(() => {})).toBe(false)
+    })
+
+    it('flags a toString that was already patched when the module loaded', async () => {
+      vi.resetModules()
+      Function.prototype.toString = function patched(): string {
+        return 'function () {}'
+      }
+      const fresh = await import('../src/detection/integrity.js')
+      Function.prototype.toString = realToString
+
+      const result = await fresh.validateIntegrity()
+      expect(result.violations.map((v) => v.name)).toContain('native_function_toString_overridden')
+    })
   })
 })

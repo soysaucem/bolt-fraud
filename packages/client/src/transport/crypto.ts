@@ -8,24 +8,51 @@
 
 const IV_LENGTH = 12
 
+const PEM_PUBLIC_HEADER = '-----BEGIN PUBLIC KEY-----'
+
+// Imported RSA keys, keyed by PEM. A rejected import is evicted so a retry can succeed.
+const _publicKeyCache = new Map<string, Promise<CryptoKey>>()
+
+function getPublicKey(publicKeyPem: string): Promise<CryptoKey> {
+  let cached = _publicKeyCache.get(publicKeyPem)
+  if (!cached) {
+    cached = importPublicKey(publicKeyPem)
+    cached.catch(() => _publicKeyCache.delete(publicKeyPem))
+    _publicKeyCache.set(publicKeyPem, cached)
+  }
+  return cached
+}
+
 export async function encrypt(
   plaintext: Uint8Array,
   publicKeyPem: string | undefined,
   keyId: number = 0,
+  devMode: boolean = false,
 ): Promise<string> {
-  // Dev mode — no public key provided, return plaintext as base64url
+  if (!Number.isInteger(keyId) || keyId < 0 || keyId > 255) {
+    throw new Error('[bolt-fraud] keyId must be an integer from 0 to 255')
+  }
+
   if (!publicKeyPem) {
+    if (!devMode) {
+      throw new Error('[bolt-fraud] publicKey is required unless devMode is true')
+    }
+    // Dev mode — no public key provided, return plaintext as base64url
     return base64urlEncode(plaintext)
   }
 
-  const rsaKey = await importPublicKey(publicKeyPem)
+  if (!publicKeyPem.includes(PEM_PUBLIC_HEADER)) {
+    throw new Error('[bolt-fraud] publicKey must be a PEM-encoded SPKI public key')
+  }
+
+  const rsaKey = await getPublicKey(publicKeyPem)
   const aesKey = await generateAESKey()
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH))
 
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     aesKey,
-    new Uint8Array(plaintext).buffer as ArrayBuffer,
+    plaintext as Uint8Array<ArrayBuffer>,
   )
 
   const wrappedKey = await crypto.subtle.wrapKey('raw', aesKey, rsaKey, {
@@ -131,7 +158,10 @@ export async function generateAESKey(): Promise<CryptoKey> {
 }
 
 export function base64urlEncode(bytes: Uint8Array): string {
-  const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join('')
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[])
+  }
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 

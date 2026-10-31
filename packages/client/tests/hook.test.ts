@@ -53,20 +53,36 @@ describe('shouldProtect', () => {
       expect(result).toBe(false)
     })
 
-    it('returns false when protectedPatterns is an empty array (falls through to same-origin)', () => {
-      // Arrange: empty array means no patterns — falls through to same-origin check.
-      // jsdom sets window.location.origin to 'null' (opaque origin), so same-origin
-      // check with an absolute cross-origin URL returns false.
+    it('returns false when protectedPatterns is an empty array (no same-origin fallback)', () => {
       const config: BoltFraudConfig = {
         ...baseConfig,
         protectedPatterns: [],
       }
 
-      // Act
-      const result = shouldProtect('https://other.com/path', config)
+      expect(shouldProtect('https://other.com/path', config)).toBe(false)
+      expect(shouldProtect(`${window.location.origin}/api/data`, config)).toBe(false)
+    })
 
-      // Assert
-      expect(result).toBe(false)
+    it('gives the same answer on repeated calls with a global-flag regex', () => {
+      const config: BoltFraudConfig = {
+        ...baseConfig,
+        protectedPatterns: [/\/api\//g],
+      }
+
+      for (let i = 0; i < 4; i++) {
+        expect(shouldProtect('https://example.com/api/users', config)).toBe(true)
+      }
+    })
+
+    it('gives the same answer on repeated calls with a sticky regex', () => {
+      const config: BoltFraudConfig = {
+        ...baseConfig,
+        protectedPatterns: [/^https:\/\/example\.com/y],
+      }
+
+      for (let i = 0; i < 4; i++) {
+        expect(shouldProtect('https://example.com/a', config)).toBe(true)
+      }
     })
 
     it('returns true when URL matches a pattern anchored to path prefix', () => {
@@ -84,45 +100,15 @@ describe('shouldProtect', () => {
     })
   })
 
-  // ── Default same-origin behavior ────────────────────────────────────────────
+  // ── No patterns ─────────────────────────────────────────────────────────────
 
-  describe('default same-origin behavior (no protectedPatterns)', () => {
-    it('returns true for a same-origin URL (relative path)', () => {
-      // Arrange: jsdom's window.location.href is 'about:blank' by default, but
-      // relative URLs resolve against it. Use an absolute URL that matches the origin.
-      // jsdom default location is http://localhost/ in some configs; use relative path.
-      const config: BoltFraudConfig = { ...baseConfig }
-      const origin = window.location.origin
-
-      // Act: relative URL resolves to same origin as window.location
-      const result = shouldProtect('/api/data', config)
-
-      // Assert: if origin is 'null' (opaque), parsed.origin won't match, but
-      // for non-opaque origins it should return true. We just verify no exception.
-      // The key assertion: relative URLs don't throw and return a boolean.
-      expect(typeof result).toBe('boolean')
-    })
-
-    it('returns false for a cross-origin absolute URL', () => {
-      // Arrange
+  describe('without protectedPatterns', () => {
+    it('never protects anything, including same-origin URLs', () => {
       const config: BoltFraudConfig = { ...baseConfig }
 
-      // Act: jsdom origin won't be 'https://evil.com'
-      const result = shouldProtect('https://evil.com/steal-data', config)
-
-      // Assert
-      expect(result).toBe(false)
-    })
-
-    it('returns false for a cross-origin URL with different scheme', () => {
-      // Arrange
-      const config: BoltFraudConfig = { ...baseConfig }
-
-      // Act
-      const result = shouldProtect('http://example.com/api', config)
-
-      // Assert: different origin (http vs https or different host than jsdom location)
-      expect(typeof result).toBe('boolean')
+      expect(shouldProtect('/api/data', config)).toBe(false)
+      expect(shouldProtect(`${window.location.origin}/api/data`, config)).toBe(false)
+      expect(shouldProtect('https://evil.com/steal-data', config)).toBe(false)
     })
   })
 
@@ -203,16 +189,11 @@ describe('shouldProtect', () => {
       expect(result).toBe(false)
     })
 
-    it('extracts URL from Request object for same-origin check', () => {
-      // Arrange: no patterns, falls through to same-origin check
+    it('returns false for a Request URL when no patterns are configured', () => {
       const config: BoltFraudConfig = { ...baseConfig }
       const request = new Request('https://evil.com/exfiltrate')
 
-      // Act: extract URL from Request (as the hook does)
-      const result = shouldProtect(request.url, config)
-
-      // Assert: evil.com is not same origin as jsdom's location
-      expect(result).toBe(false)
+      expect(shouldProtect(request.url, config)).toBe(false)
     })
   })
 

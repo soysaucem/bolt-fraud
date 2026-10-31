@@ -1,5 +1,7 @@
 import type { BfScrollEvent } from '../types.js'
 
+const LISTENER_OPTIONS = { capture: true, passive: true } as const
+
 export class ScrollTracker {
   private readonly _buffer: BfScrollEvent[]
   private readonly _capacity: number
@@ -29,7 +31,7 @@ export class ScrollTracker {
       this.push(this._buildEvent(now))
     }
 
-    document.addEventListener('scroll', this._onScroll, { passive: true })
+    document.addEventListener('scroll', this._onScroll, LISTENER_OPTIONS)
   }
 
   stop(): void {
@@ -37,7 +39,7 @@ export class ScrollTracker {
     this._listening = false
 
     if (this._onScroll) {
-      document.removeEventListener('scroll', this._onScroll)
+      document.removeEventListener('scroll', this._onScroll, LISTENER_OPTIONS)
     }
     this._onScroll = null
   }

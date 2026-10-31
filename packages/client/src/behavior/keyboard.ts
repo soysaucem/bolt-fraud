@@ -1,5 +1,13 @@
 import type { BfKeyboardEvent } from '../types.js'
 
+const LISTENER_OPTIONS = { capture: true, passive: true } as const
+
+function isPasswordField(target: EventTarget | null): boolean {
+  return typeof HTMLInputElement !== 'undefined' &&
+    target instanceof HTMLInputElement &&
+    target.type === 'password'
+}
+
 export class KeyboardTracker {
   private readonly _buffer: BfKeyboardEvent[]
   private readonly _capacity: number
@@ -23,24 +31,25 @@ export class KeyboardTracker {
 
     this._onKeyDown = (e: KeyboardEvent) => {
       // Filter out auto-repeat events — only capture initial keydown
-      if (e.repeat) return
-      this.push(this._buildEvent('keydown', e))
+      if (e.repeat || isPasswordField(e.target)) return
+      this.push(this._buildEvent('keydown'))
     }
 
     this._onKeyUp = (e: KeyboardEvent) => {
-      this.push(this._buildEvent('keyup', e))
+      if (isPasswordField(e.target)) return
+      this.push(this._buildEvent('keyup'))
     }
 
-    document.addEventListener('keydown', this._onKeyDown)
-    document.addEventListener('keyup', this._onKeyUp)
+    document.addEventListener('keydown', this._onKeyDown, LISTENER_OPTIONS)
+    document.addEventListener('keyup', this._onKeyUp, LISTENER_OPTIONS)
   }
 
   stop(): void {
     if (!this._listening) return
     this._listening = false
 
-    if (this._onKeyDown) document.removeEventListener('keydown', this._onKeyDown)
-    if (this._onKeyUp) document.removeEventListener('keyup', this._onKeyUp)
+    if (this._onKeyDown) document.removeEventListener('keydown', this._onKeyDown, LISTENER_OPTIONS)
+    if (this._onKeyUp) document.removeEventListener('keyup', this._onKeyUp, LISTENER_OPTIONS)
 
     this._onKeyDown = null
     this._onKeyUp = null
@@ -69,11 +78,8 @@ export class KeyboardTracker {
     return this._totalEvents
   }
 
-  private _buildEvent(type: BfKeyboardEvent['type'], e: KeyboardEvent): BfKeyboardEvent {
-    return {
-      type,
-      code: e.code,
-      t: performance.now(),
-    }
+  // Key identity is never recorded: only timing, so typed content cannot leak.
+  private _buildEvent(type: BfKeyboardEvent['type']): BfKeyboardEvent {
+    return { type, t: performance.now() }
   }
 }

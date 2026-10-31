@@ -13,6 +13,20 @@ import type {
 
 const textEncoder = new TextEncoder()
 
+/** Only the newest events of each behavior ring are sent; keeps the token under header limits. */
+export const MAX_SERIALIZED_EVENTS_PER_RING = 32
+
+const MAX_STR_BYTES = 0xffff
+
+function clampInt(value: number, max: number): number {
+  if (!Number.isFinite(value)) return value > 0 ? max : 0
+  return Math.min(max, Math.max(0, Math.round(value)))
+}
+
+export const clampU8 = (value: number): number => clampInt(value, 0xff)
+export const clampU16 = (value: number): number => clampInt(value, 0xffff)
+export const clampU32 = (value: number): number => clampInt(value, 0xffff_ffff)
+
 export function serialize(payload: TokenPayload): Uint8Array {
   const writer = new BinaryWriter()
 
@@ -33,7 +47,8 @@ export function serialize(payload: TokenPayload): Uint8Array {
   // Canvas, WebGL, Audio hashes
   writer.writeStr(fp.canvas.hash)
   writer.writeStr(fp.webgl.hash)
-  writer.writeStr(fp.audio.hash)
+  // retired audio slot, kept for 0.3.x server wire compatibility
+  writer.writeStr('')
 
   // WebGL renderer info
   writer.writeStr(fp.webgl.renderer)
@@ -53,7 +68,9 @@ export function serialize(payload: TokenPayload): Uint8Array {
   writer.writeU16(fp.navigator.hardwareConcurrency)
   writer.writeU16(fp.navigator.maxTouchPoints)
   writer.writeU16(fp.navigator.pluginCount)
-  writer.writeU8(fp.navigator.deviceMemory === null ? 0 : fp.navigator.deviceMemory)
+  const deviceMemory = fp.navigator.deviceMemory
+  // 0 means unknown; sub-1 GiB values (0.25, 0.5) must not collapse into it
+  writer.writeU8(deviceMemory == null ? 0 : Math.max(1, Math.round(deviceMemory)))
   writer.writeU8(fp.navigator.cookieEnabled ? 1 : 0)
 
   // Navigator languages
@@ -104,8 +121,12 @@ export function serialize(payload: TokenPayload): Uint8Array {
   const beh = payload.behavior
 
   // Mouse events
-  writer.writeU16(beh.mouse.length)
-  for (const ev of beh.mouse) {
+  const mouseEvents = beh.mouse.slice(-MAX_SERIALIZED_EVENTS_PER_RING)
+  const keyboardEvents = beh.keyboard.slice(-MAX_SERIALIZED_EVENTS_PER_RING)
+  const scrollEvents = beh.scroll.slice(-MAX_SERIALIZED_EVENTS_PER_RING)
+
+  writer.writeU16(mouseEvents.length)
+  for (const ev of mouseEvents) {
     writer.writeStr(ev.type)
     writer.writeU16(ev.x)
     writer.writeU16(ev.y)
@@ -114,16 +135,17 @@ export function serialize(payload: TokenPayload): Uint8Array {
   }
 
   // Keyboard events
-  writer.writeU16(beh.keyboard.length)
-  for (const ev of beh.keyboard) {
+  writer.writeU16(keyboardEvents.length)
+  for (const ev of keyboardEvents) {
     writer.writeStr(ev.type)
-    writer.writeStr(ev.code)
+    // retired key-code slot: key identity is never collected, kept for wire compatibility
+    writer.writeStr('')
     writer.writeU32(Math.round(ev.t))
   }
 
   // Scroll events
-  writer.writeU16(beh.scroll.length)
-  for (const ev of beh.scroll) {
+  writer.writeU16(scrollEvents.length)
+  for (const ev of scrollEvents) {
     writer.writeU16(ev.x)
     writer.writeU16(ev.y)
     writer.writeU32(Math.round(ev.t))
@@ -136,6 +158,9 @@ export function serialize(payload: TokenPayload): Uint8Array {
   const snap = Math.round(beh.snapshotAt)
   writer.writeU32(Math.floor(snap / 0x1_0000_0000))  // high
   writer.writeU32(snap >>> 0)                          // low
+
+  // Trailing field added in 0.4.0; servers read it only if bytes remain
+  writer.writeStr(fp.timezone)
 
   return writer.finish()
 }
@@ -161,7 +186,7 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   // ── Fingerprint ────────────────────────────────────────────────────────────
   const canvasHash = reader.readStr()
   const webglHash = reader.readStr()
-  const audioHash = reader.readStr()
+  reader.readStr() // retired audio slot
 
   const webglRenderer = reader.readStr()
   const webglVendor = reader.readStr()
@@ -237,12 +262,12 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   }
 
   const keyboardCount = reader.readU16()
-  const keyboard: Array<{ type: 'keydown' | 'keyup'; code: string; t: number }> = []
+  const keyboard: Array<{ type: 'keydown' | 'keyup'; t: number }> = []
   for (let i = 0; i < keyboardCount; i++) {
     const type = reader.readStr() as 'keydown' | 'keyup'
-    const code = reader.readStr()
+    reader.readStr() // retired key-code slot
     const t = reader.readU32()
-    keyboard.push({ type, code, t })
+    keyboard.push({ type, t })
   }
 
   const scrollCount = reader.readU16()
@@ -261,6 +286,8 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   const snapshotAtLow = reader.readU32()
   const snapshotAt = snapshotAtHigh * 0x1_0000_0000 + snapshotAtLow
 
+  const timezone = reader.hasRemaining() ? reader.readStr() : ''
+
   return {
     timestamp,
     nonce,
@@ -275,7 +302,6 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
         shadingLanguageVersion: webglShadingLanguageVersion,
         extensions,
       },
-      audio: { hash: audioHash },
       navigator: {
         userAgent,
         language,
@@ -298,6 +324,7 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
         pixelDepth,
         devicePixelRatio,
       },
+      timezone,
       collectedAt,
     },
     detection: {
@@ -332,24 +359,30 @@ export class BinaryWriter {
 
   writeU8(value: number): void {
     this._ensureCapacity(1)
-    this._view.setUint8(this._offset, value)
+    this._view.setUint8(this._offset, clampU8(value))
     this._offset += 1
   }
 
   writeU16(value: number): void {
     this._ensureCapacity(2)
-    this._view.setUint16(this._offset, value, false)
+    this._view.setUint16(this._offset, clampU16(value), false)
     this._offset += 2
   }
 
   writeU32(value: number): void {
     this._ensureCapacity(4)
-    this._view.setUint32(this._offset, value, false)
+    this._view.setUint32(this._offset, clampU32(value), false)
     this._offset += 4
   }
 
   writeStr(value: string): void {
-    const encoded = textEncoder.encode(value)
+    let encoded = textEncoder.encode(value)
+    if (encoded.length > MAX_STR_BYTES) {
+      // Cut on a UTF-8 boundary so a multi-byte sequence is never split
+      let end = MAX_STR_BYTES
+      while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) end--
+      encoded = encoded.subarray(0, end)
+    }
     this.writeU16(encoded.length)
     this._ensureCapacity(encoded.length)
     new Uint8Array(this._buf, this._offset, encoded.length).set(encoded)
@@ -386,6 +419,10 @@ class BinaryReader {
 
   constructor(bytes: Uint8Array) {
     this._view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  }
+
+  hasRemaining(): boolean {
+    return this._offset < this._view.byteLength
   }
 
   readU8(): number {

@@ -46,11 +46,9 @@ export async function detectAutomation(): Promise<AutomationResult> {
 
   // 6. Stack trace analysis — check for automation framework frames
   const stack = captureStack().toLowerCase()
-  const stackHeadless =
-    stack.includes('puppeteer') ||
-    stack.includes('playwright') ||
-    stack.includes('selenium') ||
-    stack.includes('webdriver')
+  // Only the injected-script markers: a bare "webdriver" or "selenium" substring
+  // appears in legitimate URLs and library names.
+  const stackHeadless = /__(puppeteer|playwright)_evaluation_script__/.test(stack)
   push('stack_trace_headless', stackHeadless, stackHeadless ? 'automation frame in stack' : undefined)
 
   // 7. Headless user-agent detection
@@ -67,9 +65,9 @@ export async function detectAutomation(): Promise<AutomationResult> {
   const langEmpty = !languages || languages.length === 0
   push('languages_empty', langEmpty)
 
-  // 9. Connection RTT === 0 — common in headless network stacks
-  const conn = (navigator as Navigator & { connection?: { rtt?: number } }).connection
-  push('connection_rtt_zero', conn?.rtt === 0)
+  // 9. Connection RTT === 0 — Chrome quantises RTT, so 0 happens on fast LANs.
+  // Always reported as not detected; the name stays for wire compatibility.
+  push('connection_rtt_zero', false)
 
   return {
     isAutomated: signals.some((s) => s.detected),

@@ -13,10 +13,6 @@ export interface WebGLFingerprint {
   readonly extensions: readonly string[]
 }
 
-export interface AudioFingerprint {
-  readonly hash: string
-}
-
 export interface NavigatorInfo {
   readonly userAgent: string
   readonly language: string
@@ -44,9 +40,9 @@ export interface ScreenInfo {
 export interface FingerprintData {
   readonly canvas: CanvasFingerprint
   readonly webgl: WebGLFingerprint
-  readonly audio: AudioFingerprint
   readonly navigator: NavigatorInfo
   readonly screen: ScreenInfo
+  readonly timezone: string
   readonly collectedAt: number
 }
 
@@ -105,7 +101,6 @@ export interface BfMouseEvent {
 
 export interface BfKeyboardEvent {
   readonly type: 'keydown' | 'keyup'
-  readonly code: string
   readonly t: number
 }
 
@@ -144,12 +139,21 @@ export interface EncryptedToken {
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 export interface BoltFraudConfig {
+  /** Informational only; the SDK never contacts this URL. */
   readonly serverUrl: string
+  /** RSA public key (SPKI PEM). Required unless `devMode` is true. */
   readonly publicKey?: string
+  /** Key id byte, integer 0-255. */
   readonly keyId?: number
+  /** Allow key-less (plaintext) tokens. Never enable in production. */
+  readonly devMode?: boolean
+  /** Opt-in: attach the token to matching fetch calls. Requires `protectedPatterns`. */
   readonly hookFetch?: boolean
+  /** Opt-in: attach the token to matching XHR calls. Requires `protectedPatterns`. */
   readonly hookXHR?: boolean
-  readonly collectInterval?: number
+  /** Collect mouse/keyboard/scroll behavior (default true). */
+  readonly behavior?: boolean
+  /** Ring buffer size per behavior type, integer 1-1024 (default 128). */
   readonly ringBufferSize?: number
   readonly tokenHeader?: string
   readonly protectedPatterns?: readonly RegExp[]

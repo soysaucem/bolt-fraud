@@ -31,7 +31,7 @@ describe('detectAutomation', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     // Restore window properties set during tests
-    const w = window as Record<string, unknown>
+    const w = window as unknown as Record<string, unknown>
     delete w['__puppeteer_evaluation_script__']
     delete w['__playwright']
     delete w['_playwrightInstance']
@@ -104,7 +104,7 @@ describe('detectAutomation', () => {
 
   it('detects puppeteer_runtime when __puppeteer_evaluation_script__ is present on window', async () => {
     // Arrange
-    ;(window as Record<string, unknown>)['__puppeteer_evaluation_script__'] = true
+    ;(window as unknown as Record<string, unknown>)['__puppeteer_evaluation_script__'] = true
 
     // Act
     const result = await detectAutomation()
@@ -117,7 +117,7 @@ describe('detectAutomation', () => {
 
   it('detects playwright_runtime when __playwright is present on window', async () => {
     // Arrange
-    ;(window as Record<string, unknown>)['__playwright'] = {}
+    ;(window as unknown as Record<string, unknown>)['__playwright'] = {}
 
     // Act
     const result = await detectAutomation()
@@ -129,7 +129,7 @@ describe('detectAutomation', () => {
   })
 
   it('detects playwright_runtime when _playwrightInstance is present on window', async () => {
-    ;(window as Record<string, unknown>)['_playwrightInstance'] = {}
+    ;(window as unknown as Record<string, unknown>)['_playwrightInstance'] = {}
 
     const result = await detectAutomation()
 
@@ -138,7 +138,7 @@ describe('detectAutomation', () => {
   })
 
   it('detects selenium_runtime when domAutomation is present on window', async () => {
-    ;(window as Record<string, unknown>)['domAutomation'] = true
+    ;(window as unknown as Record<string, unknown>)['domAutomation'] = true
 
     const result = await detectAutomation()
 
@@ -148,7 +148,7 @@ describe('detectAutomation', () => {
   })
 
   it('detects selenium_runtime when domAutomationController is present on window', async () => {
-    ;(window as Record<string, unknown>)['domAutomationController'] = {}
+    ;(window as unknown as Record<string, unknown>)['domAutomationController'] = {}
 
     const result = await detectAutomation()
 
@@ -157,7 +157,7 @@ describe('detectAutomation', () => {
   })
 
   it('detects phantom_runtime when _phantom is present on window', async () => {
-    ;(window as Record<string, unknown>)['_phantom'] = {}
+    ;(window as unknown as Record<string, unknown>)['_phantom'] = {}
 
     const result = await detectAutomation()
 
@@ -167,7 +167,7 @@ describe('detectAutomation', () => {
   })
 
   it('detects phantom_runtime when callPhantom is present on window', async () => {
-    ;(window as Record<string, unknown>)['callPhantom'] = () => {}
+    ;(window as unknown as Record<string, unknown>)['callPhantom'] = () => {}
 
     const result = await detectAutomation()
 
@@ -249,5 +249,54 @@ describe('detectAutomation', () => {
 
     const signal = result.signals.find((s) => s.name === 'languages_empty')
     expect(signal?.detected).toBe(false)
+  })
+
+  // ── connection_rtt_zero / stack markers ─────────────────────────────────────
+
+  describe('connection rtt', () => {
+    afterEach(() => {
+      delete (navigator as unknown as Record<string, unknown>)['connection']
+    })
+
+    it('keeps the connection_rtt_zero signal but never detects on rtt = 0 alone', async () => {
+      Object.defineProperty(navigator, 'connection', { value: { rtt: 0 }, configurable: true })
+
+      const result = await detectAutomation()
+
+      const signal = result.signals.find((s) => s.name === 'connection_rtt_zero')
+      expect(signal).toBeDefined()
+      expect(signal?.detected).toBe(false)
+      // nothing else may be detected because of rtt
+      const others = result.signals.filter((s) => s.name !== 'connection_rtt_zero' && s.detected)
+      expect(result.isAutomated).toBe(others.length > 0)
+    })
+  })
+
+  describe('stack_trace_headless', () => {
+    it('does not flag the word "webdriver" or "selenium" in a frame', async () => {
+      const webdriverHelper = () => detectAutomation()
+      const seleniumLikeLibrary = () => webdriverHelper()
+
+      const result = await seleniumLikeLibrary()
+
+      expect(result.signals.find((s) => s.name === 'stack_trace_headless')?.detected).toBe(false)
+    })
+
+    it('flags the injected puppeteer evaluation-script marker', async () => {
+      const __puppeteer_evaluation_script__ = () => detectAutomation()
+
+      const result = await __puppeteer_evaluation_script__()
+
+      expect(result.signals.find((s) => s.name === 'stack_trace_headless')?.detected).toBe(true)
+      expect(result.isAutomated).toBe(true)
+    })
+
+    it('flags the injected playwright evaluation-script marker', async () => {
+      const __playwright_evaluation_script__ = () => detectAutomation()
+
+      const result = await __playwright_evaluation_script__()
+
+      expect(result.signals.find((s) => s.name === 'stack_trace_headless')?.detected).toBe(true)
+    })
   })
 })

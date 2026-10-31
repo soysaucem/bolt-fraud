@@ -23,12 +23,13 @@ export async function getWebGLFingerprint(): Promise<WebGLFingerprint> {
 
   if (typeof document === 'undefined') return empty
 
+  let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null
   try {
     const canvas = document.createElement('canvas')
     canvas.width = 64
     canvas.height = 64
 
-    const gl: WebGLRenderingContext | WebGL2RenderingContext | null =
+    gl =
       canvas.getContext('webgl2') ??
       canvas.getContext('webgl') ??
       getExperimentalWebGL(canvas)
@@ -123,6 +124,13 @@ export async function getWebGLFingerprint(): Promise<WebGLFingerprint> {
     return { hash, renderer, vendor, version, shadingLanguageVersion, extensions }
   } catch {
     return empty
+  } finally {
+    // Release the GPU context immediately; browsers cap live contexts per page.
+    try {
+      gl?.getExtension('WEBGL_lose_context')?.loseContext()
+    } catch {
+      // context already lost
+    }
   }
 }
 

@@ -1,6 +1,14 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { BinaryWriter, serialize, deserialize } from '../src/transport/serializer.js'
+import {
+  BinaryWriter,
+  serialize,
+  deserialize,
+  clampU8,
+  clampU16,
+  MAX_SERIALIZED_EVENTS_PER_RING,
+} from '../src/transport/serializer.js'
+import type { BfMouseEvent, BfKeyboardEvent, BfScrollEvent } from '../src/types.js'
 import { createMockTokenPayload, createMockFingerprint, createMockBehavior } from './helpers.js'
 
 // ─── BinaryWriter ─────────────────────────────────────────────────────────────
@@ -267,7 +275,7 @@ describe('serialize / deserialize round-trip', () => {
     expect(restored.timestamp).toBe(payload.timestamp)
     expect(restored.fingerprint.canvas.hash).toBe(payload.fingerprint.canvas.hash)
     expect(restored.fingerprint.webgl.hash).toBe(payload.fingerprint.webgl.hash)
-    expect(restored.fingerprint.audio.hash).toBe(payload.fingerprint.audio.hash)
+    expect(restored.fingerprint.timezone).toBe(payload.fingerprint.timezone)
     expect(restored.fingerprint.webgl.renderer).toBe(payload.fingerprint.webgl.renderer)
     expect(restored.fingerprint.webgl.vendor).toBe(payload.fingerprint.webgl.vendor)
     expect(restored.fingerprint.webgl.extensions).toEqual(
@@ -358,9 +366,9 @@ describe('serialize / deserialize round-trip', () => {
           { type: 'click', x: 50, y: 60, t: 300, buttons: 0 },
         ],
         keyboard: [
-          { type: 'keydown', code: 'KeyA', t: 1000 },
-          { type: 'keyup', code: 'KeyA', t: 1050 },
-          { type: 'keydown', code: 'Enter', t: 1100 },
+          { type: 'keydown', t: 1000 },
+          { type: 'keyup', t: 1050 },
+          { type: 'keydown', t: 1100 },
         ],
         scroll: [
           { x: 0, y: 100, t: 2000 },
@@ -381,8 +389,8 @@ describe('serialize / deserialize round-trip', () => {
     expect(restored.behavior.mouse[0]?.type).toBe('move')
     expect(restored.behavior.mouse[1]?.type).toBe('down')
     expect(restored.behavior.keyboard).toHaveLength(3)
-    expect(restored.behavior.keyboard[0]?.code).toBe('KeyA')
-    expect(restored.behavior.keyboard[2]?.code).toBe('Enter')
+    expect(restored.behavior.keyboard[0]).toEqual({ type: 'keydown', t: 1000 })
+    expect(restored.behavior.keyboard[2]).toEqual({ type: 'keydown', t: 1100 })
     expect(restored.behavior.scroll).toHaveLength(2)
     expect(restored.behavior.scroll[1]?.y).toBe(200)
     expect(restored.behavior.totalMouseEvents).toBe(10)
@@ -660,5 +668,208 @@ describe('deserialize version validation', () => {
 
     // Act + Assert: no throw
     expect(() => deserialize(bytes)).not.toThrow()
+  })
+})
+
+// ─── 0.4.0 wire contract ──────────────────────────────────────────────────────
+
+/** Minimal reader mirroring the server's field order, used to inspect raw slots. */
+class RawReader {
+  private offset = 0
+  private readonly view: DataView
+  constructor(private readonly bytes: Uint8Array) {
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  }
+  u8(): number {
+    return this.view.getUint8(this.offset++)
+  }
+  u32(): number {
+    const v = this.view.getUint32(this.offset, false)
+    this.offset += 4
+    return v
+  }
+  str(): string {
+    const len = this.view.getUint16(this.offset, false)
+    this.offset += 2
+    const out = new TextDecoder().decode(this.bytes.subarray(this.offset, this.offset + len))
+    this.offset += len
+    return out
+  }
+}
+
+describe('0.4.0 wire contract', () => {
+  it('writes an empty retired audio slot between the webgl hash and the renderer', () => {
+    const bytes = serialize(createMockTokenPayload())
+    const reader = new RawReader(bytes)
+
+    expect(reader.u8()).toBe(1)
+    reader.u32()
+    reader.u32()
+    reader.str() // nonce
+    reader.str() // sdkVersion
+    expect(reader.str()).toBe('abc123canvashash')
+    expect(reader.str()).toBe('def456webglhash')
+    expect(reader.str()).toBe('') // audio slot
+    expect(reader.str()).toBe('ANGLE (Intel, Mesa)')
+  })
+
+  it('never writes key codes, even if an event object carries one', () => {
+    const leaky = [{ type: 'keydown', code: 'KeyQ', t: 5 }] as unknown as BfKeyboardEvent[]
+    const payload = createMockTokenPayload({
+      behavior: createMockBehavior({ keyboard: leaky, totalKeyboardEvents: 1 }),
+    })
+
+    const bytes = serialize(payload)
+
+    expect(new TextDecoder('latin1').decode(bytes)).not.toContain('KeyQ')
+    const restored = deserialize(bytes)
+    expect(restored.behavior.keyboard).toEqual([{ type: 'keydown', t: 5 }])
+  })
+
+  it('appends the timezone after the snapshotAt pair', () => {
+    const payload = createMockTokenPayload()
+    const bytes = serialize(payload)
+    const tz = new TextEncoder().encode('Asia/Ho_Chi_Minh')
+    const tail = bytes.subarray(bytes.length - tz.length - 2)
+
+    expect(new DataView(tail.buffer, tail.byteOffset).getUint16(0, false)).toBe(tz.length)
+    expect(new TextDecoder().decode(tail.subarray(2))).toBe('Asia/Ho_Chi_Minh')
+  })
+
+  it('round-trips the timezone', () => {
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({ timezone: 'Asia/Ho_Chi_Minh' }),
+    })
+
+    expect(deserialize(serialize(payload)).fingerprint.timezone).toBe('Asia/Ho_Chi_Minh')
+  })
+
+  it('yields an empty timezone when the trailing field is absent (0.3.x token)', () => {
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({ timezone: 'Asia/Ho_Chi_Minh' }),
+    })
+    const bytes = serialize(payload)
+    const withoutTail = bytes.subarray(0, bytes.length - ('Asia/Ho_Chi_Minh'.length + 2))
+
+    expect(deserialize(withoutTail).fingerprint.timezone).toBe('')
+  })
+
+  it('round-trips an empty timezone', () => {
+    const payload = createMockTokenPayload({ fingerprint: createMockFingerprint({ timezone: '' }) })
+
+    expect(deserialize(serialize(payload)).fingerprint.timezone).toBe('')
+  })
+
+  it('serializes only the newest events of each ring', () => {
+    const total = 128
+    const mouse: BfMouseEvent[] = Array.from({ length: total }, (_, i) => ({
+      type: 'move', x: i, y: i, t: i, buttons: 0,
+    }))
+    const keyboard: BfKeyboardEvent[] = Array.from({ length: total }, (_, i) => ({ type: 'keydown', t: i }))
+    const scroll: BfScrollEvent[] = Array.from({ length: total }, (_, i) => ({ x: 0, y: i, t: i }))
+    const payload = createMockTokenPayload({
+      behavior: createMockBehavior({
+        mouse, keyboard, scroll,
+        totalMouseEvents: 5000, totalKeyboardEvents: 6000, totalScrollEvents: 7000,
+      }),
+    })
+
+    const restored = deserialize(serialize(payload))
+
+    expect(MAX_SERIALIZED_EVENTS_PER_RING).toBe(32)
+    expect(restored.behavior.mouse).toHaveLength(32)
+    expect(restored.behavior.mouse[0]?.t).toBe(total - 32)
+    expect(restored.behavior.mouse[31]?.t).toBe(total - 1)
+    expect(restored.behavior.keyboard).toHaveLength(32)
+    expect(restored.behavior.scroll).toHaveLength(32)
+    // totals are not truncated
+    expect(restored.behavior.totalMouseEvents).toBe(5000)
+    expect(restored.behavior.totalKeyboardEvents).toBe(6000)
+    expect(restored.behavior.totalScrollEvents).toBe(7000)
+  })
+})
+
+describe('serializer hardening', () => {
+  it('clamps coordinates to the u16 range and rounds them', () => {
+    const mouse: BfMouseEvent[] = [
+      { type: 'move', x: -5, y: 1.7, t: 1, buttons: 0 },
+      { type: 'move', x: 70000, y: 65535.4, t: 2, buttons: 300 },
+    ]
+    const scroll: BfScrollEvent[] = [{ x: -1, y: 70000, t: 3 }]
+    const payload = createMockTokenPayload({
+      behavior: createMockBehavior({ mouse, scroll }),
+    })
+
+    const restored = deserialize(serialize(payload))
+
+    expect(restored.behavior.mouse[0]).toMatchObject({ x: 0, y: 2 })
+    expect(restored.behavior.mouse[1]).toMatchObject({ x: 65535, y: 65535, buttons: 255 })
+    expect(restored.behavior.scroll[0]).toMatchObject({ x: 0, y: 65535 })
+  })
+
+  it('clamps screen dimensions and color depth', () => {
+    const base = createMockFingerprint()
+    const payload = createMockTokenPayload({
+      fingerprint: createMockFingerprint({
+        screen: { ...base.screen, width: -1, height: 99999, colorDepth: 300, devicePixelRatio: 1000 },
+      }),
+    })
+
+    const { screen } = deserialize(serialize(payload)).fingerprint
+
+    expect(screen.width).toBe(0)
+    expect(screen.height).toBe(65535)
+    expect(screen.colorDepth).toBe(255)
+    expect(screen.devicePixelRatio).toBe(655.35)
+  })
+
+  it('clampU8 / clampU16 round, clamp and handle non-finite values', () => {
+    expect(clampU16(-5)).toBe(0)
+    expect(clampU16(1.7)).toBe(2)
+    expect(clampU16(70000)).toBe(65535)
+    expect(clampU16(Number.NaN)).toBe(0)
+    expect(clampU16(Number.POSITIVE_INFINITY)).toBe(65535)
+    expect(clampU8(-1)).toBe(0)
+    expect(clampU8(255.4)).toBe(255)
+    expect(clampU8(256)).toBe(255)
+  })
+
+  it('does not desync later fields when a string exceeds 65535 bytes', () => {
+    const payload = createMockTokenPayload({ nonce: 'a'.repeat(70000) })
+
+    const restored = deserialize(serialize(payload))
+
+    expect(restored.nonce).toHaveLength(65535)
+    expect(restored.fingerprint.canvas.hash).toBe(payload.fingerprint.canvas.hash)
+    expect(restored.fingerprint.timezone).toBe(payload.fingerprint.timezone)
+    expect(restored.behavior.totalMouseEvents).toBe(payload.behavior.totalMouseEvents)
+  })
+
+  it('truncates on a UTF-8 boundary', () => {
+    // 1 + 3 * 30000 bytes: byte 65535 falls inside a 3-byte sequence
+    const payload = createMockTokenPayload({ nonce: 'a' + '€'.repeat(30000) })
+
+    const restored = deserialize(serialize(payload))
+
+    expect(restored.nonce).not.toContain('\ufffd')
+    expect(restored.nonce).toBe('a' + '€'.repeat(21844))
+    expect(restored.fingerprint.canvas.hash).toBe(payload.fingerprint.canvas.hash)
+  })
+
+  it('keeps sub-1 GiB deviceMemory distinguishable from unknown', () => {
+    const base = createMockFingerprint()
+    const roundTrip = (deviceMemory: number | null) =>
+      deserialize(
+        serialize(
+          createMockTokenPayload({
+            fingerprint: createMockFingerprint({ navigator: { ...base.navigator, deviceMemory } }),
+          }),
+        ),
+      ).fingerprint.navigator.deviceMemory
+
+    expect(roundTrip(0.25)).toBe(1)
+    expect(roundTrip(0.5)).toBe(1)
+    expect(roundTrip(8)).toBe(8)
+    expect(roundTrip(null)).toBeNull()
   })
 })

@@ -20,7 +20,6 @@ export function createMockFingerprint(overrides?: Partial<FingerprintData>): Fin
       shadingLanguageVersion: 'WebGL GLSL ES 3.00',
       extensions: ['OES_texture_float', 'EXT_color_buffer_float'],
     },
-    audio: { hash: 'ghi789audiohash' },
     navigator: {
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
       language: 'en-US',
@@ -43,6 +42,7 @@ export function createMockFingerprint(overrides?: Partial<FingerprintData>): Fin
       pixelDepth: 24,
       devicePixelRatio: 2,
     },
+    timezone: 'Asia/Ho_Chi_Minh',
     collectedAt: 1700000000000,
     ...overrides,
   }
@@ -82,8 +82,8 @@ export function createMockBehavior(overrides?: Partial<BehaviorData>): BehaviorD
     { type: 'click', x: 150, y: 220, t: 1050, buttons: 1 },
   ]
   const keyboard: BfKeyboardEvent[] = [
-    { type: 'keydown', code: 'KeyA', t: 2000 },
-    { type: 'keyup', code: 'KeyA', t: 2100 },
+    { type: 'keydown', t: 2000 },
+    { type: 'keyup', t: 2100 },
   ]
   const scroll: BfScrollEvent[] = [
     { x: 0, y: 100, t: 3000 },

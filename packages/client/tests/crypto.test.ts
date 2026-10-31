@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { encrypt, decrypt, base64urlEncode, base64urlDecode } from '../src/transport/crypto.js'
 
 // ─── base64url encoding ───────────────────────────────────────────────────────
@@ -277,40 +277,53 @@ describe('encrypt / decrypt — key rotation wire format', () => {
     expect(token1).not.toBe(token2)
   })
 
-  // ── keyId out-of-range — u8 truncation behavior ────────────────────────────
-  //
-  // `bundle[0] = keyId` writes to a Uint8Array slot. JavaScript Typed Arrays
-  // apply a ToUint8 conversion (i.e. value & 0xFF) before storing, so values
-  // outside [0, 255] are silently truncated — no error is thrown.
-  //
-  // 256  → 256 & 0xFF = 0
-  // 257  → 257 & 0xFF = 1
-  // -1   → (-1 & 0xFF) as unsigned = 255
+  // ── keyId / devMode / PEM validation ───────────────────────────────────────
 
-  it('keyId 256 is truncated to 0 (u8 overflow wraps around)', async () => {
-    // Arrange
-    const token = await encrypt(plaintext, publicKeyPem, 256)
-    const bundleBytes = base64urlDecode(token)
-
-    // Assert: 256 % 256 = 0
-    expect(bundleBytes[0]).toBe(0)
+  it.each([256, 257, -1, 1.5, Number.NaN])('rejects keyId %s', async (keyId) => {
+    await expect(encrypt(plaintext, publicKeyPem, keyId)).rejects.toThrow(/keyId/)
   })
 
-  it('keyId 257 is truncated to 1 (u8 overflow wraps around)', async () => {
-    // Arrange
-    const token = await encrypt(plaintext, publicKeyPem, 257)
-    const bundleBytes = base64urlDecode(token)
-
-    // Assert: 257 % 256 = 1
-    expect(bundleBytes[0]).toBe(1)
+  it('rejects a missing publicKey unless devMode is true', async () => {
+    await expect(encrypt(plaintext, undefined)).rejects.toThrow(/publicKey is required/)
+    await expect(encrypt(plaintext, '')).rejects.toThrow(/publicKey is required/)
   })
 
-  it('keyId -1 is truncated to 255 (negative wraps to max u8)', async () => {
-    // Arrange
-    const token = await encrypt(plaintext, publicKeyPem, -1)
-    const bundleBytes = base64urlDecode(token)
+  it('devMode returns the plaintext as base64url when there is no publicKey', async () => {
+    const token = await encrypt(plaintext, undefined, 0, true)
+    expect(Array.from(base64urlDecode(token))).toEqual(Array.from(plaintext))
+  })
 
-    // Assert: -1 in u8 two's complement = 255
-    expect(bundleBytes[0]).toBe(255)
+  it('rejects a key that is not a PEM public key', async () => {
+    await expect(encrypt(plaintext, 'not-a-pem')).rejects.toThrow(/PEM/)
+    await expect(
+      encrypt(plaintext, '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----'),
+    ).rejects.toThrow(/PEM/)
+  })
+
+  // ── Imported RSA key is cached ─────────────────────────────────────────────
+
+  it('imports the RSA public key once per PEM', async () => {
+    const spy = vi.spyOn(crypto.subtle, 'importKey')
+    try {
+      // A distinct PEM (trailing newline) so earlier tests' cache entries do not interfere
+      const pem = publicKeyPem + '\n'
+      await encrypt(plaintext, pem)
+      await encrypt(plaintext, pem)
+      const rsaImports = spy.mock.calls.filter((call) => call[0] === 'spki')
+      expect(rsaImports).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('does not cache a failed import', async () => {
+    const bad = '-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----'
+    await expect(encrypt(plaintext, bad)).rejects.toThrow()
+    await expect(encrypt(plaintext, bad)).rejects.toThrow()
+  })
+
+  it('base64urlEncode handles inputs larger than one apply() chunk', () => {
+    const big = new Uint8Array(0x8000 * 3 + 7).map((_, i) => i % 251)
+    expect(Array.from(base64urlDecode(base64urlEncode(big)))).toEqual(Array.from(big))
   })
 })

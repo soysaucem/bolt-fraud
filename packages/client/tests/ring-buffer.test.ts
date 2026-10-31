@@ -11,8 +11,8 @@ function makeMouseEvent(x: number, y: number, t: number): BfMouseEvent {
   return { type: 'move', x, y, t, buttons: 0 }
 }
 
-function makeKeyboardEvent(code: string, t: number): BfKeyboardEvent {
-  return { type: 'keydown', code, t }
+function makeKeyboardEvent(t: number): BfKeyboardEvent {
+  return { type: 'keydown', t }
 }
 
 function makeScrollEvent(y: number, t: number): BfScrollEvent {
@@ -125,43 +125,43 @@ describe('KeyboardTracker ring buffer', () => {
 
   it('snapshot returns all events when fewer than capacity', () => {
     const tracker = new KeyboardTracker(10)
-    tracker.push(makeKeyboardEvent('KeyA', 100))
-    tracker.push(makeKeyboardEvent('KeyB', 200))
+    tracker.push(makeKeyboardEvent(100))
+    tracker.push(makeKeyboardEvent(200))
 
     const snap = tracker.snapshot()
     expect(snap).toHaveLength(2)
-    expect(snap[0]).toMatchObject({ code: 'KeyA', t: 100 })
-    expect(snap[1]).toMatchObject({ code: 'KeyB', t: 200 })
+    expect(snap[0]).toMatchObject({ t: 100 })
+    expect(snap[1]).toMatchObject({ t: 200 })
   })
 
   it('snapshot returns exactly capacity events when exactly capacity pushed', () => {
     const tracker = new KeyboardTracker(3)
-    tracker.push(makeKeyboardEvent('KeyA', 10))
-    tracker.push(makeKeyboardEvent('KeyB', 20))
-    tracker.push(makeKeyboardEvent('KeyC', 30))
+    tracker.push(makeKeyboardEvent(10))
+    tracker.push(makeKeyboardEvent(20))
+    tracker.push(makeKeyboardEvent(30))
 
     const snap = tracker.snapshot()
     expect(snap).toHaveLength(3)
-    expect(snap[0]).toMatchObject({ code: 'KeyA' })
-    expect(snap[2]).toMatchObject({ code: 'KeyC' })
+    expect(snap[0]).toMatchObject({ t: 10 })
+    expect(snap[2]).toMatchObject({ t: 30 })
   })
 
   it('discards oldest events when more than capacity are pushed', () => {
     const tracker = new KeyboardTracker(2)
-    tracker.push(makeKeyboardEvent('KeyA', 10)) // discarded
-    tracker.push(makeKeyboardEvent('KeyB', 20))
-    tracker.push(makeKeyboardEvent('KeyC', 30))
+    tracker.push(makeKeyboardEvent(10)) // discarded
+    tracker.push(makeKeyboardEvent(20))
+    tracker.push(makeKeyboardEvent(30))
 
     const snap = tracker.snapshot()
     expect(snap).toHaveLength(2)
-    expect(snap[0]).toMatchObject({ code: 'KeyB' })
-    expect(snap[1]).toMatchObject({ code: 'KeyC' })
+    expect(snap[0]).toMatchObject({ t: 20 })
+    expect(snap[1]).toMatchObject({ t: 30 })
   })
 
   it('totalEvents counts all pushes beyond capacity', () => {
     const tracker = new KeyboardTracker(3)
     for (let i = 0; i < 7; i++) {
-      tracker.push(makeKeyboardEvent(`Key${i}`, i * 100))
+      tracker.push(makeKeyboardEvent(i * 100))
     }
     expect(tracker.totalEvents).toBe(7)
     expect(tracker.snapshot()).toHaveLength(3)

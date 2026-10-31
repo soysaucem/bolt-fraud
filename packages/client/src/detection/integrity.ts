@@ -1,5 +1,30 @@
 import type { IntegrityResult, IntegrityViolation, IntegrityViolationName } from '../types.js'
 
+// Captured at module load so later patching of Function.prototype.toString cannot
+// make the native-function checks unreliable. Whether it was native at load time is
+// recorded once; a page that patches toString afterwards is not flagged.
+const nativeToString = Function.prototype.toString
+const toStringNativeAtLoad = ((): boolean => {
+  try {
+    return nativeToString.call(nativeToString).includes('[native code]')
+  } catch {
+    return false
+  }
+})()
+
+/** Max prototype hops between Window.prototype and EventTarget.prototype (Chromium has WindowProperties). */
+const MAX_PROTO_HOPS = 3
+
+function inheritsFromWithin(proto: object, target: object, maxHops: number): boolean {
+  let current: object | null = proto
+  for (let i = 0; i < maxHops; i++) {
+    current = Object.getPrototypeOf(current) as object | null
+    if (current === null) return false
+    if (current === target) return true
+  }
+  return false
+}
+
 /**
  * Validate browser API integrity: prototype chains, native function toString().
  * Catches automation frameworks that patch DOM APIs.
@@ -11,24 +36,17 @@ export async function validateIntegrity(): Promise<IntegrityResult> {
     violations.push({ name, detail })
   }
 
-  // 1. Verify Function.prototype.toString itself is native
-  // If toString is overridden, all subsequent isNativeFunction checks are unreliable.
-  // We use the raw toString check directly here without relying on isNativeFunction.
-  try {
-    const toStringSrc = Function.prototype.toString.call(Function.prototype.toString)
-    if (!toStringSrc.includes('[native code]')) {
-      push('native_function_toString_overridden', 'Function.prototype.toString is not native')
-    }
-  } catch {
-    push('native_function_toString_overridden', 'Function.prototype.toString threw')
+  // 1. Function.prototype.toString was native when this module loaded
+  if (!toStringNativeAtLoad) {
+    push('native_function_toString_overridden', 'Function.prototype.toString was not native at load')
   }
 
   // 2. Window → EventTarget prototype chain
   try {
-    if (Object.getPrototypeOf(Window.prototype) !== EventTarget.prototype) {
+    if (!inheritsFromWithin(Window.prototype, EventTarget.prototype, MAX_PROTO_HOPS)) {
       push(
         'window_event_target_chain_broken',
-        'Window.prototype.__proto__ !== EventTarget.prototype',
+        'Window.prototype does not inherit from EventTarget.prototype',
       )
     }
   } catch {
@@ -81,7 +99,7 @@ export async function validateIntegrity(): Promise<IntegrityResult> {
 export function isNativeFunction(fn: unknown): boolean {
   if (typeof fn !== 'function') return false
   try {
-    return Function.prototype.toString.call(fn).includes('[native code]')
+    return nativeToString.call(fn).includes('[native code]')
   } catch {
     return false
   }

@@ -1,5 +1,7 @@
 import type { BfMouseEvent } from '../types.js'
 
+const LISTENER_OPTIONS = { capture: true, passive: true } as const
+
 export class MouseTracker {
   private readonly _buffer: BfMouseEvent[]
   private readonly _capacity: number
@@ -45,20 +47,20 @@ export class MouseTracker {
       this.push(this._buildEvent('click', e, performance.now()))
     }
 
-    document.addEventListener('mousemove', this._onMove)
-    document.addEventListener('mousedown', this._onDown)
-    document.addEventListener('mouseup', this._onUp)
-    document.addEventListener('click', this._onClick)
+    document.addEventListener('pointermove', this._onMove, LISTENER_OPTIONS)
+    document.addEventListener('pointerdown', this._onDown, LISTENER_OPTIONS)
+    document.addEventListener('pointerup', this._onUp, LISTENER_OPTIONS)
+    document.addEventListener('click', this._onClick, LISTENER_OPTIONS)
   }
 
   stop(): void {
     if (!this._listening) return
     this._listening = false
 
-    if (this._onMove) document.removeEventListener('mousemove', this._onMove)
-    if (this._onDown) document.removeEventListener('mousedown', this._onDown)
-    if (this._onUp) document.removeEventListener('mouseup', this._onUp)
-    if (this._onClick) document.removeEventListener('click', this._onClick)
+    if (this._onMove) document.removeEventListener('pointermove', this._onMove, LISTENER_OPTIONS)
+    if (this._onDown) document.removeEventListener('pointerdown', this._onDown, LISTENER_OPTIONS)
+    if (this._onUp) document.removeEventListener('pointerup', this._onUp, LISTENER_OPTIONS)
+    if (this._onClick) document.removeEventListener('click', this._onClick, LISTENER_OPTIONS)
 
     this._onMove = null
     this._onDown = null
