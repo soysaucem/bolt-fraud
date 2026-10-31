@@ -12,7 +12,11 @@ const DEFAULT_MAX_TOKEN_AGE_MS = 30_000
 const DEFAULT_MAX_TOKEN_ABSOLUTE_AGE_MS = 3_600_000
 /** |age| beyond this (but inside the acceptance window) is treated as client clock skew. */
 const CLOCK_SKEW_THRESHOLD_MS = 300_000
-/** Extra nonce lifetime so a nonce never expires before its token stops being accepted. */
+/**
+ * Extra nonce lifetime. A token is accepted while |age| <= window, so one stamped up to
+ * `window` in the future stays acceptable until `timestamp + window` (almost 2 * window after
+ * the first claim); the claim therefore lives 2 * window + slack.
+ */
 const NONCE_TTL_SLACK_MS = 5_000
 
 export interface ScorerResult {
@@ -159,10 +163,14 @@ export class RiskEngine {
   }
 
   async score(token: Token, clientIP?: string): Promise<Decision> {
-    // Nonce replay protection — atomic claim before any other scoring. The TTL outlives
-    // the acceptance window, so a nonce can never expire while its token is still accepted.
+    // Nonce replay protection — atomic claim before any other scoring. The TTL covers the whole
+    // symmetric acceptance window (future-dated tokens included), so a nonce can never expire
+    // while its token is still accepted.
     if (this._store?.claimNonce) {
-      const claimed = await this._store.claimNonce(token.nonce, this._maxTokenAbsoluteAgeMs + NONCE_TTL_SLACK_MS)
+      const claimed = await this._store.claimNonce(
+        token.nonce,
+        this._maxTokenAbsoluteAgeMs * 2 + NONCE_TTL_SLACK_MS,
+      )
       if (!claimed) {
         return {
           decision: 'block',

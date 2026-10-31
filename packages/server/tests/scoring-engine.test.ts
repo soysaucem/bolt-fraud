@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { RiskEngine } from '../src/scoring/engine.js'
 import { createMockToken, createMockFingerprint, createMockDetection, createMockBehavior } from './helpers.js'
 import type { FingerprintStore } from '../src/model/types.js'
+import { MemoryStore } from '../src/store/memory.js'
 
 // Default acceptance window (maxTokenAbsoluteAgeMs): 1 hour
 const WINDOW = 3_600_000
@@ -431,7 +432,6 @@ describe('RiskEngine', () => {
     })
 
     it('instant blocks token_expired for an older-than-window token whose nonce is NOT in the store', async () => {
-      const { MemoryStore } = await import('../src/store/memory.js')
       const engine = new RiskEngine({ store: new MemoryStore() })
       const token = createMockToken({ timestamp: Date.now() - (WINDOW + 10_000), nonce: 'never-seen' })
 
@@ -455,12 +455,12 @@ describe('RiskEngine', () => {
       const decision = await engine.score(createMockToken({ timestamp: Date.now() - 130_000 }))
 
       expect(decision.reasons).toContain('token_expired')
-      expect(claimNonce).toHaveBeenCalledWith(expect.any(String), 125_000)
+      expect(claimNonce).toHaveBeenCalledWith(expect.any(String), 2 * 120_000 + 5_000)
     })
   })
 
   describe('nonce replay protection', () => {
-    it('claims the nonce with TTL = acceptance window + 5000 ms', async () => {
+    it('claims the nonce with TTL = 2 x acceptance window + 5000 ms', async () => {
       const claimNonce = vi.fn().mockResolvedValue(true)
       const store: FingerprintStore = {
         saveFingerprint: vi.fn().mockResolvedValue(undefined),
@@ -472,13 +472,12 @@ describe('RiskEngine', () => {
       await engine.score(createMockToken({ nonce: 'ttl-check' }), '1.2.3.4')
 
       expect(claimNonce).toHaveBeenCalledTimes(1)
-      expect(claimNonce).toHaveBeenCalledWith('ttl-check', WINDOW + 5_000)
+      expect(claimNonce).toHaveBeenCalledWith('ttl-check', 2 * WINDOW + 5_000)
     })
 
     it('blocks a replay at t=120 s and at t=30 min of a token that was 10 min old (inside window)', async () => {
       vi.useFakeTimers()
       try {
-        const { MemoryStore } = await import('../src/store/memory.js')
         const engine = new RiskEngine({ store: new MemoryStore() })
         const token = createMockToken({ nonce: 'skewed', timestamp: Date.now() - 600_000 })
 
@@ -500,10 +499,35 @@ describe('RiskEngine', () => {
       }
     })
 
+    it('keeps blocking the replay of a FUTURE-dated token until it stops being accepted', async () => {
+      vi.useFakeTimers()
+      try {
+        const engine = new RiskEngine({ store: new MemoryStore() })
+        // Stamped 59 min ahead: accepted now, and still accepted (age within +-window) for ~2 h.
+        const token = createMockToken({ nonce: 'future', timestamp: Date.now() + WINDOW - 60_000 })
+
+        const first = await engine.score(token, '1.2.3.4')
+        expect(first.decision).not.toBe('block')
+        expect(first.reasons).toContain('token_clock_skew')
+
+        // Past the old nonce lifetime (window + 5 s): the token's age is now ~ +66 s, still accepted.
+        vi.advanceTimersByTime(WINDOW + 6_000)
+        const replay = await engine.score(token, '1.2.3.4')
+        expect(replay.decision).toBe('block')
+        expect(replay.reasons).toContain('token_nonce_replayed')
+
+        // And right up to the end of its acceptance window.
+        vi.advanceTimersByTime(WINDOW - 70_000)
+        const lateReplay = await engine.score(token, '1.2.3.4')
+        expect(lateReplay.decision).toBe('block')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('a nonce never expires before its token stops being accepted', async () => {
       vi.useFakeTimers()
       try {
-        const { MemoryStore } = await import('../src/store/memory.js')
         const engine = new RiskEngine({ store: new MemoryStore() })
         const token = createMockToken({ nonce: 'edge', timestamp: Date.now() })
 
@@ -521,7 +545,6 @@ describe('RiskEngine', () => {
     })
 
     it('two concurrent scores with the same nonce yield exactly one non-replay', async () => {
-      const { MemoryStore } = await import('../src/store/memory.js')
       const engine = new RiskEngine({ store: new MemoryStore() })
       const token = createMockToken({ nonce: 'race' })
 
@@ -554,7 +577,6 @@ describe('RiskEngine', () => {
 
     it('instant blocks on the second call with the same nonce (replay detected)', async () => {
       // Arrange: store with nonce tracking
-      const { MemoryStore } = await import('../src/store/memory.js')
       const store = new MemoryStore()
       const engine = new RiskEngine({ store })
       const nonce = 'unique-nonce-abc123'
@@ -575,7 +597,6 @@ describe('RiskEngine', () => {
 
     it('does not instant block when different nonces are used', async () => {
       // Arrange
-      const { MemoryStore } = await import('../src/store/memory.js')
       const store = new MemoryStore()
       const engine = new RiskEngine({ store })
 
