@@ -1,6 +1,6 @@
 {
   "name": "@soysaucem/bolt-fraud-adapter-nestjs",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "NestJS adapter for bolt-fraud anti-bot verification",
   "type": "module",
   "main": "./dist/index.cjs",
