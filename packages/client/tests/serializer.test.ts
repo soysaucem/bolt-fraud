@@ -698,7 +698,7 @@ class RawReader {
 }
 
 describe('0.4.0 wire contract', () => {
-  it('writes an empty retired audio slot between the webgl hash and the renderer', () => {
+  it('writes the audio hash slot (empty by default) between the webgl hash and the renderer', () => {
     const bytes = serialize(createMockTokenPayload())
     const reader = new RawReader(bytes)
 

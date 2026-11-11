@@ -1,6 +1,7 @@
 import type { BoltFraudConfig, EncryptedToken, FingerprintData } from './types.js'
 import { runDetection } from './detection/index.js'
 import type { DetectionResult } from './detection/index.js'
+import { cachedAudioHash, scheduleAudioProbe } from './fingerprint/audio.js'
 import { collectFingerprint } from './fingerprint/index.js'
 import {
   startBehaviorCollection,
@@ -130,6 +131,7 @@ export function init(config: BoltFraudConfig): Promise<void> {
 
       // Warm the fingerprint in idle slices so the first getToken() is fast.
       void fingerprintOnce().catch(() => {})
+      if (config.audio !== false) scheduleAudioProbe()
     } catch (err) {
       if (epoch === _epoch) resetState()
       config.onError?.(toError(err))
@@ -213,6 +215,7 @@ async function _buildFreshToken(): Promise<EncryptedToken> {
       timestamp: Date.now(),
       nonce,
       sdkVersion: SDK_VERSION,
+      audioHash: config.audio === false ? '' : cachedAudioHash(),
     },
     config,
   )

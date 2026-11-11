@@ -109,6 +109,7 @@ export function createMockTokenPayload(overrides?: Partial<TokenPayload>): Token
     timestamp: 1700000000000,
     nonce: 'test-nonce-12345678',
     sdkVersion: '0.1.0',
+    audioHash: '',
     ...overrides,
   }
 }
