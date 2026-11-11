@@ -234,7 +234,7 @@ function validateTokenShape(raw: unknown): Token {
  *   --- Fingerprint ---
  *   str    canvas.hash
  *   str    webgl.hash
- *   str    audio.hash          ← retired: clients >= 0.4.0 always write ''; read for 0.3.x compat
+ *   str    audio.hash          ← cached background-probe hash (empty until the probe has completed once per browser profile); not scored
  *   str    webgl.renderer
  *   str    webgl.vendor
  *   str    webgl.version
@@ -366,7 +366,7 @@ function deserializeBinary(bytes: Buffer): Token {
   // Fingerprint — order matches client serializer exactly
   const canvasHash = readStr('canvas.hash', 128)
   const webglHash = readStr('webgl.hash', 128)
-  const audioHash = readStr('audio.hash', 128)   // retired slot: '' from clients >= 0.4.0
+  const audioHash = readStr('audio.hash', 128)   // cached probe hash, '' until probed; not scored
   const webglRenderer = readStr('webgl.renderer', 256)
   const webglVendor = readStr('webgl.vendor', 256)
   const webglVersion = readStr('webgl.version', 256)

@@ -11,7 +11,8 @@ import type { Fingerprint } from '../model/types.js'
  *   canvas+webgl both empty but real UA:        +10  fingerprint_suppressed_suspicious
  *   screen dimensions all 0:                    +10  screen_dimensions_zero
  *
- * The audio hash (retired from clients in 0.4.0) is not scored.
+ * The audio hash (cached background-probe value, empty until the probe has completed once per
+ * browser profile) is carried on the wire but the server does not score it.
  */
 export function scoreFingerprint(
   fp: Fingerprint,

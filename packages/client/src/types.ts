@@ -129,6 +129,8 @@ export interface TokenPayload {
   readonly timestamp: number
   readonly nonce: string
   readonly sdkVersion: string
+  /** Cached background audio probe hash; '' until the probe has completed once per profile. */
+  readonly audioHash: string
 }
 
 export interface EncryptedToken {
@@ -155,6 +157,8 @@ export interface BoltFraudConfig {
   readonly behavior?: boolean
   /** Ring buffer size per behavior type, integer 1-1024 (default 128). */
   readonly ringBufferSize?: number
+  /** Run the background audio probe and attach its cached hash to tokens (default true). */
+  readonly audio?: boolean
   readonly tokenHeader?: string
   readonly protectedPatterns?: readonly RegExp[]
   readonly onTokenReady?: (token: EncryptedToken) => void

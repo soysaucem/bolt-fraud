@@ -47,8 +47,9 @@ export function serialize(payload: TokenPayload): Uint8Array {
   // Canvas, WebGL, Audio hashes
   writer.writeStr(fp.canvas.hash)
   writer.writeStr(fp.webgl.hash)
-  // retired audio slot, kept for 0.3.x server wire compatibility
-  writer.writeStr('')
+  // Audio slot: cached background-probe hash (empty until the probe has completed once per
+  // browser profile). The server does not score it.
+  writer.writeStr(payload.audioHash)
 
   // WebGL renderer info
   writer.writeStr(fp.webgl.renderer)
@@ -186,7 +187,7 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
   // ── Fingerprint ────────────────────────────────────────────────────────────
   const canvasHash = reader.readStr()
   const webglHash = reader.readStr()
-  reader.readStr() // retired audio slot
+  const audioHash = reader.readStr() // cached probe hash, not scored by the server
 
   const webglRenderer = reader.readStr()
   const webglVendor = reader.readStr()
@@ -292,6 +293,7 @@ export function deserialize(bytes: Uint8Array): TokenPayload {
     timestamp,
     nonce,
     sdkVersion,
+    audioHash,
     fingerprint: {
       canvas: { hash: canvasHash },
       webgl: {
