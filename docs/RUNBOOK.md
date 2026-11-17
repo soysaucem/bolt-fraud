@@ -386,71 +386,25 @@ Verify the scoring engine is functional by running a test token through `verify(
 
 ### Continuous Integration
 
-CI runs automatically on every push to `main` and all pull requests.
-
-**Workflow**: `.github/workflows/ci.yml`
-
-**Runs**:
-1. Typecheck client, server, NestJS adapter, Express adapter (parallel)
-2. Build server (required by adapters)
-3. Run test suite (client, server, NestJS adapter, Express adapter)
-4. Full build (main branch only)
-
-**Test matrices**: Node.js 18 and 20
-
-**Example**:
-```bash
-# View CI status
-gh run list --repo bolt-fraud
-
-# View specific run
-gh run view <run-id>
-
-# Re-run a failed workflow
-gh run rerun <run-id>
-```
+There is no hosted CI: GitHub Actions workflows were removed and must not be added. Run the checks locally before merging (on Node.js 18 and 20 where both are installed): typecheck client, server, NestJS adapter and Express adapter (build the server first, the adapters need it), run the test suite of the four packages, and run the full build. The exact commands are in `CLAUDE.md`, section CI/CD.
 
 ### Release Process
 
-Releases are triggered manually via the release workflow.
+Releases are cut by hand from a local machine:
 
-**Workflow**: `.github/workflows/release.yml`
-
-**Steps**:
-1. Dispatch the workflow with a version bump type
-2. Workflow runs full test suite and builds all packages
-3. Bumps version in all `package.json` files
-4. Verifies packages are publishable with `npm pack --dry-run`
-5. Commits version bump and tags with `v<version>`
-6. Pushes commit and tags to origin
-
-**Trigger a release**:
+1. Run the checks above.
+2. Bump the version in all `package.json` files (`npm version`, see `CLAUDE.md`).
+3. Verify the packages are publishable with `npm pack --dry-run`.
+4. Commit the version bump and tag it `v<version>`.
+5. Push the commit and tags to origin.
 
 ```bash
-# Patch release (v0.1.0 -> v0.1.1)
-gh workflow run release.yml --repo bolt-fraud -f bump=patch
-
-# Minor release (v0.1.0 -> v0.2.0)
-gh workflow run release.yml --repo bolt-fraud -f bump=minor
-
-# Major release (v0.1.0 -> v1.0.0)
-gh workflow run release.yml --repo bolt-fraud -f bump=major
-```
-
-**Monitor release**:
-```bash
-# View workflow run
-gh run list --workflow release.yml --repo bolt-fraud
-
-# View specific run
-gh run view <run-id> --repo bolt-fraud
-
-# Check tags created
+# Check the tags created
 git tag -l | tail -5
 ```
 
 **Post-release**:
-After the release workflow completes:
+After the release:
 1. Verify tags on GitHub: `https://github.com/<owner>/bolt-fraud/releases`
 2. Manually publish packages to npm (npm publish is not automated)
 3. Update CHANGELOG.md with release notes

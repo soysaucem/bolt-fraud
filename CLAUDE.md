@@ -119,23 +119,11 @@ Bundle wire format: `[1B keyId][2B wrappedKeyLen BE][wrappedKey bytes][12B rando
 
 ## CI/CD
 
-### GitHub Actions Workflows
+There is no GitHub Actions CI/CD in this repository, and workflows must not be added (`.github/workflows` stays absent). Tests run, and releases are cut and published, from a local machine (the former CI and Release workflows were removed).
 
-**CI Pipeline** (`.github/workflows/ci.yml`):
-- Runs on every push to `main` and all PRs
-- Tests on Node.js 18 and 20
-- Typechecks client, server, adapters in parallel
-- Runs full test suite (client, server, adapters)
-- Builds all packages only on main push (PRs skip full build)
-- Cancels in-progress runs for the same branch
+**Checks before merging** (the former CI; Node.js 18 and 20):
+- `npm ci`; typecheck `packages/client` and `packages/server` (`npx tsc --noEmit -p packages/<name>/tsconfig.json`), build the server (`npx tsup`, the adapters need it), then typecheck `packages/adapter-nestjs` and `packages/adapter-express`
+- tests: `npm test -w packages/client`, `-w packages/server`, `-w packages/adapter-nestjs`, `-w packages/adapter-express`
+- `npm run build`
 
-**Release Workflow** (`.github/workflows/release.yml`):
-- Manual trigger: `gh workflow run release.yml -f bump=patch|minor|major`
-- Checks out repo with full history for version bumping
-- Typechecks all packages
-- Runs full test suite
-- Builds all packages
-- Bumps versions in all package.json files atomically
-- Runs `npm pack --dry-run` to verify publishable artifacts
-- Commits version bump and tags with `v<version>`
-- Pushes commit and tags to origin (npm publish not included — manual for now)
+**Release by hand** (the former Release workflow): run the checks above, bump all versions with `npm version <patch|minor|major> --no-git-tag-version --workspaces --include-workspace-root`, run `npm pack --dry-run` in each package, commit the bump, tag `v<version>`, push the commit and the tags; `npm publish` is a separate manual step. (On `main` the former workflow also published the four packages to GitHub Packages and ran on every push; this branch is the older scaffold.)
