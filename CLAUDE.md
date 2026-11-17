@@ -119,23 +119,16 @@ Bundle wire format: `[1B keyId][2B wrappedKeyLen BE][wrappedKey bytes][12B rando
 
 ## CI/CD
 
-### GitHub Actions Workflows
+There is no GitHub Actions CI/CD in this repository, and workflows must not be added (`.github/workflows` stays absent). Tests run, and releases are cut and published, from a local machine (the former CI and Release workflows were removed).
 
-**CI Pipeline** (`.github/workflows/ci.yml`):
-- Runs on every push to `main` and all PRs
-- Tests on Node.js 18 and 20
-- Typechecks client, server, adapters in parallel
-- Runs full test suite (client, server, adapters)
-- Builds all packages only on main push (PRs skip full build)
-- Cancels in-progress runs for the same branch
+**Checks before merging** (the former CI; Node.js 18 and 20):
+- `npm ci`; typecheck `packages/client` and `packages/server` (`npx tsc --noEmit -p packages/<name>/tsconfig.json`), build the server (`npx tsup`, the adapters need it), then typecheck `packages/adapter-nestjs` and `packages/adapter-express`
+- tests: `npm test -w packages/client`, `-w packages/server`, `-w packages/adapter-nestjs`, `-w packages/adapter-express`
+- `npm run build`
 
-**Release Workflow** (`.github/workflows/release.yml`):
-- Manual trigger: `gh workflow run release.yml -f bump=patch|minor|major`
-- Checks out repo with full history for version bumping
-- Typechecks all packages
-- Runs full test suite
-- Builds all packages
-- Bumps versions in all package.json files atomically
-- Runs `npm pack --dry-run` to verify publishable artifacts
-- Commits version bump and tags with `v<version>`
-- Pushes commit and tags to origin (npm publish not included — manual for now)
+**Release by hand** (the former Release workflow, which also ran automatically on every push to `main`):
+- Run the checks above.
+- Pick the bump as the workflow did: major when the commits since the last tag contain `BREAKING CHANGE` or `!:`, minor when one starts with `feat`, otherwise patch.
+- `npm version <patch|minor|major> --no-git-tag-version --workspaces --include-workspace-root`, then `npm run build` and `npm pack --dry-run` in `packages/client`, `packages/server`, `packages/adapter-nestjs` and `packages/adapter-express`.
+- Commit `chore: release v<version>`, tag `v<version>`, push the commit and the tags.
+- Publish each of the four packages with `npm publish --access public` from its directory, to GitHub Packages (`https://npm.pkg.github.com`, a token with `write:packages`).
